@@ -118,7 +118,7 @@ Examples :
  * expat 2.8.2 (MIT)
  * ffmpeg 8.1.2 (LGPL 2.1)
  * flac 1.5.0 (LGPL 2.1)
- * fontconfig 2.17.1 (MIT)
+ * fontconfig 2.18.2 (MIT)
  * freetype 2.14.3 (FreeType license)
  * fribidi 1.0.16 (LGPL 2.1)
  * gettext 0.26.0 (only libintl : LGPL 2.1)
