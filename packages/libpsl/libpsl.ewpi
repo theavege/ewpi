@@ -1,4 +1,4 @@
 name: libpsl
-version: 0.23.0
-url: https://github.com/rockdaboot/libpsl/releases/download/0.23.0/libpsl-0.23.0.tar.gz
+version: 0.23.1
+url: https://github.com/rockdaboot/libpsl/releases/download/0.23.1/libpsl-0.23.1.tar.gz
 deps: icu
