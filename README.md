@@ -116,7 +116,7 @@ Examples :
  * dbus 1.16.2 (Academic Free License version 2.1)
  * dejavu-fonts 2.37
  * expat 2.8.2 (MIT)
- * ffmpeg 8.1.2 (LGPL 2.1)
+ * ffmpeg 9.0.0 (LGPL 2.1)
  * flac 1.5.0 (LGPL 2.1)
  * fontconfig 2.18.2 (MIT)
  * freetype 2.14.3 (FreeType license)
