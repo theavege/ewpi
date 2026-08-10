@@ -27,4 +27,5 @@ jobs:
       - name: Build on Windows
         run: |
           gcc -O2 -std=c99 -Wall -Wextra -Wpedantic -o ewpi ewpi*.c
+          ./ewpi --help
           ./ewpi --verbose
