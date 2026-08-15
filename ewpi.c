@@ -954,7 +954,7 @@ _ew_packages_download(void)
             strcat(buf, "/");
             strcat(buf, iter->name);
             strcat(buf, "/downloaded");
-            system(buf);
+            (void)system(buf);
             if (iter->is_git)
             {
                 strcpy(buf, "echo 1 > ");
@@ -962,7 +962,7 @@ _ew_packages_download(void)
                 strcat(buf, "/");
                 strcat(buf, iter->name);
                 strcat(buf, "/extracted");
-                system(buf);
+                (void)system(buf);
             }
         }
     }
@@ -1130,7 +1130,7 @@ _ew_packages_extract(int verbose)
             strcat(buf, "/");
             strcat(buf, name);
             strcat(buf, "/extracted");
-            system(buf);
+            (void)system(buf);
         }
 
         c++;
@@ -1186,7 +1186,7 @@ _ew_packages_install(const char *prefix, const char *host, const char *arch, con
             strcat(buf, "/");
             strcat(buf, name);
             strcat(buf, "/installed");
-            system(buf);
+            (void)system(buf);
         }
 
         c++;
@@ -1343,10 +1343,10 @@ _ew_recurse_strip(const char *path, const char *strip)
                     ext++;
                     if (strcmp(ext, "dll") == 0)
                     {
-                        char strip_cmd[4096];
+                        char strip_cmd[8192];
                         int ret;
 
-                        snprintf(strip_cmd, sizeof(strip_cmd), "%s %s",
+                        snprintf(strip_cmd, sizeof(strip_cmd) - 1, "%s %s",
                                  strip, file);
                         printf("  %s\n", file);
                         fflush(stdout);
