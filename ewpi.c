@@ -249,6 +249,7 @@ static const char *_ew_req_host[] =
     "nm",
     "ranlib",
     "strip",
+    "make",
     "windres",
     NULL
 };
