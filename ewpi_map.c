@@ -1,5 +1,3 @@
-
-
 #ifdef _WIN32
 # include <windows.h>
 #else
@@ -37,7 +35,11 @@ ewpi_map_new(Map *map, const char *filename)
     if (!GetFileInformationByHandle(map->file, &info))
         goto close_file;
 
-    if (!(info.dwFileAttributes | FILE_ATTRIBUTE_NORMAL))
+    /* FILE_ATTRIBUTE_NORMAL is only set when no other attribute applies,
+     * so it can't be used to validate an ordinary file (most files also
+     * carry FILE_ATTRIBUTE_ARCHIVE). Mirror the POSIX S_ISREG/S_ISLNK
+     * check instead by rejecting directories. */
+    if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         goto close_file;
 
 #ifdef _WIN64
@@ -106,7 +108,7 @@ ewpi_map_new(Map *map, const char *filename)
     map->length = (size_t)st.st_size;
 
     map->base = mmap(NULL, map->length, PROT_READ, MAP_SHARED, map->fd, 0);
-    if (!map->base)
+    if (map->base == MAP_FAILED)
     {
         printf("Can not map file %s into memory\n", filename);
         goto close_fd;
