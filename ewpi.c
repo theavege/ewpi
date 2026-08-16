@@ -244,7 +244,6 @@ static const char *_ew_req_host[] =
 {
     "gcc",
     "g++",
-    "make",
     "ar",
     "dlltool",
     "nm",
@@ -303,7 +302,7 @@ _ew_requirements(const char *host)
         *(last + 1) = 0;
         strcpy(new_file, old_file);
 
-        if (i > 2)
+        if (i >= 2)
         {
             strcat(old_file, _ew_req_host[i]);
             strcat(old_file, ".exe");
