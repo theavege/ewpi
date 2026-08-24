@@ -1,6 +1,6 @@
 === release 1.3 ===
 
-2026-08-23 Vincent Torri <vincent.torri@gmail.com>
+2026-08-24 Vincent Torri <vincent.torri@gmail.com>
 
 Package removals:
   * freetype_bootstrap
@@ -59,7 +59,7 @@ Package updates:
   * openssl 4.0.1
   * pixman 0.46.4
   * taglib 2.3.1
-  * utfcpp 4.1.1
+  * utfcpp 4.2.0
   * xz 5.8.3
   * zlib 1.3.2
 
