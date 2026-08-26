@@ -130,7 +130,7 @@ Examples :
  * gst-plugins-base 1.26.10 (LGPL 2.1)
  * gst-plugins-good 1.26.10 (LGPL 2.1)
  * gstreamer 1.26.10 (LGPL 2.1)
- * harfbuzz 14.3.1 (MIT)
+ * harfbuzz 14.4.0 (MIT)
  * highway 1.4.0 (Apache 2.0)
  * iconv 0.0.10 (public domain)
  * icu 78.3 (MIT)
@@ -182,7 +182,7 @@ Examples :
  * mpg123 1.33.7 (LGPL 2.1)
  * nghttp2 1.70.0 (MIT)
  * openjpeg 2.5.4 (BSD 2-clause)
- * openssl 4.0.1 (Apache 2.0)
+ * openssl 4.0.2 (Apache 2.0)
  * opus 1.5.2 (BSD 3-clause)
  * orc 0.4.41 (BSD 2-clause)
  * pixman 0.46.4 (MIT)
@@ -196,7 +196,7 @@ Examples :
 ### Libraries compatible with LGPL v3
 
  * libde265 1.1.1 (LGPL v3)
- * libheif 1.23.1 (LGPL v3)
+ * libheif 1.23.2 (LGPL v3)
 
 ### Libraries compatible with GPL v2
 
