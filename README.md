@@ -112,10 +112,10 @@ Examples :
  * bullet 3.25 (zlib)
  * bzip2 1.0.8 (BSD 4-clause, LGPL 2.1 compatible)
  * check 0.15.2(LGPL 2.1)
- * curl 8.21.0 (MIT)
+ * curl 8.22.0 (MIT)
  * dbus 1.16.2 (Academic Free License version 2.1)
  * dejavu-fonts 2.37
- * expat 2.8.3 (MIT)
+ * expat 2.8.4 (MIT)
  * ffmpeg 9.0.0 (LGPL 2.1)
  * flac 1.5.0 (LGPL 2.1)
  * fontconfig 2.18.2 (MIT)
@@ -195,8 +195,8 @@ Examples :
 
 ### Libraries compatible with LGPL v3
 
- * libde265 1.1.1 (LGPL v3)
- * libheif 1.23.2 (LGPL v3)
+ * libde265 1.1.2 (LGPL v3)
+ * libheif 1.23.3 (LGPL v3)
 
 ### Libraries compatible with GPL v2
 
