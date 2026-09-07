@@ -588,7 +588,7 @@ public class Ewpi : Object {
                 try {
                     var message = new Soup.Message("GET", pkg.url);
                     var session = new Soup.Session();
-                    session.set("ssl-strict", false);
+                    session.set("tls-interaction", null);
                     var input_stream = session.send(message, null);
 
                     var file = File.new_for_path(Path.build_filename(dst, pkg.tarname));
