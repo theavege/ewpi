@@ -37,4 +37,4 @@ declare -ar VAR=(
     --pkg={gio-2.0,lib{soup-3.0,archive,git2-glib-1.0}}
 )
 
-vala  "${VAR[@]}" src/main.vala - --efl --insecure --verbose
+vala  "${VAR[@]}" src/main.vala -- --efl --insecure --verbose
