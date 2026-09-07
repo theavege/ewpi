@@ -9,7 +9,22 @@
  * package via its own "install.sh" script.
  *
  * Build:
- *   valac --pkg glib-2.0 --pkg gio-2.0 --pkg posix -o ewpi ewpi.vala
+ *   valac --pkg glib-2.0 --pkg gio-2.0 --pkg posix \
+ *         --pkg libsoup-3.0 --pkg libgit2-glib-1.0 --pkg libarchive \
+ *         --vapidir=/usr/share/vala/vapi \
+ *         -o ewpi ewpi.vala
+ *
+ * Test build (runs the GLib.Test suite in Ewpi.Tests instead of the CLI):
+ *   valac --pkg glib-2.0 --pkg gio-2.0 --pkg posix \
+ *         --pkg libsoup-3.0 --pkg libgit2-glib-1.0 --pkg libarchive \
+ *         --vapidir=/usr/share/vala/vapi \
+ *         -D EWPI_TEST -o ewpi-tests ewpi.vala
+ *   ./ewpi-tests
+ *
+ * (--vapidir is needed only because this system's libgit2-glib-1.0.vapi,
+ * symlinked as ggit-1.0.vapi, lives outside valac's default vapi search
+ * path; --pkg glib-2.0/gio-2.0/posix/libsoup-3.0/libarchive resolve from
+ * the default path on their own.)
  *
  * Notable differences from the C original (why the rewrite looks different):
  *   - ewpi_map.c's manual mmap/CreateFileMapping wrapper is replaced by
@@ -21,9 +36,26 @@
  *     buffer sizing and no shell-quoting to get wrong.
  *   - mkdir -p is DirUtils.create_with_parents(); the original's manual
  *     path-walking mkdir_p is no longer needed.
+ *   - Downloads, git clones, and archive extraction no longer shell out to
+ *     wget/git/tar at all — see download_file(), clone_repo(), and
+ *     extract_archive(), which talk to libsoup3, libgit2-glib, and
+ *     libarchive directly. Those three binaries are no longer a
+ *     requirement of this program (REQ_TOOLS no longer lists them).
+ *
+ * Layout: everything that makes up the program lives in the `Ewpi`
+ * namespace (Package, Installer, ResolveError). The CLI `main()` at the
+ * bottom is the only top-level symbol, so it can stay outside the
+ * namespace as Vala's entry point. When built with -D EWPI_TEST, a
+ * second `Ewpi.Tests` namespace and an alternate `main()` compile in
+ * instead, giving a self-contained test binary from this same file
+ * with no separate test file to keep in sync.
  */
 
 using GLib;
+using Soup;
+using Archive;
+
+namespace Ewpi {
 
 // ---------------------------------------------------------------------
 // Package descriptor, parsed from <name>/<name>.ewpi
@@ -143,7 +175,12 @@ public class Package : Object {
 // Main installer
 // ---------------------------------------------------------------------
 
-public class Ewpi : Object {
+public errordomain ResolveError {
+    UNKNOWN_DEPENDENCY,
+    CYCLE
+}
+
+public class Installer : Object {
     public const int VMAJ = 1;
     public const int VMIN = 3;
 
@@ -156,18 +193,20 @@ public class Ewpi : Object {
         unowned string version_flag;
     }
 
-    // Every plain (non-host-prefixed) tool the pipeline invokes later:
-    // make/cmake/etc. for the various packages' install.sh scripts, and
-    // git/wget/tar/makensis for download_all()/extract_all()/
-    // build_nsis_installer() themselves. Checking all of them up front
-    // means a missing tool is reported here, not mid-build.
+    // Every plain (non-host-prefixed) tool the *user's own build scripts*
+    // may need: make/cmake/meson/etc. for the various packages'
+    // install.sh, and makensis for build_nsis_installer(). wget, git, and
+    // tar used to be here too, but download_all()/extract_all() now talk
+    // to libsoup3/libgit2-glib/libarchive directly (see below), so those
+    // three external binaries are no longer a requirement of this program
+    // at all — only of whatever a given package's own install.sh happens
+    // to shell out to, which is outside our control to check for anyway.
     const ToolCheck[] REQ_TOOLS = {
         { "make", "--version" }, { "cmake", "--version" },
         { "python", "--version" }, { "perl", "--version" },
         { "meson", "--version" }, { "ninja", "--version" },
         { "yasm", "--version" }, { "nasm", "--version" },
-        { "gperf", "--version" }, { "wget", "--version" },
-        { "git", "--version" }, { "tar", "--version" },
+        { "gperf", "--version" },
         { "bison", "--version" }, { "flex", "--version" },
         { "itstool", "--version" }, { "makensis", "-VERSION" }
     };
@@ -175,12 +214,15 @@ public class Ewpi : Object {
     string package_dir_git;
     string package_dir_dst;
 
-    // name -> Package, plus the order packages were discovered in the git dir
-    HashTable<string, Package> packages = new HashTable<string, Package>(str_hash, str_equal);
-    string[] all_names = {};
+    // name -> Package, plus the order packages were discovered in the git dir.
+    // internal (rather than the file-default) so Ewpi.Tests, in the same
+    // compilation, can build a fake package graph directly without
+    // touching the filesystem.
+    internal HashTable<string, Package> packages = new HashTable<string, Package>(str_hash, str_equal);
+    internal string[] all_names = {};
 
     // dependency-resolved build order (topological, deps before dependents)
-    string[] order = {};
+    internal string[] order = {};
 
     int name_field_width = 0;
 
@@ -192,29 +234,60 @@ public class Ewpi : Object {
         return FileUtils.test(path, FileTest.IS_DIR);
     }
 
-    // Returns the file size, or 0 if it doesn't exist / isn't a regular file.
-    static int64 regular_file_size(string path) {
-        if (!FileUtils.test(path, FileTest.IS_REGULAR))
-            return 0;
+    // -------------------------------------------------------------
+    // Per-package state (downloaded / extracted / installed)
+    //
+    // Previously three flat marker files ("downloaded", "extracted",
+    // "installed") per package directory, each just checked for existence.
+    // That's now a single "state.ini" GLib.KeyFile per package, in the
+    // [state] group as three booleans. One file to look at instead of
+    // three, and it's a natural place to add more fields later (a
+    // timestamp, a tarball checksum) without adding more marker files.
+    const string STATE_FILE = "state.ini";
+    const string STATE_GROUP = "state";
+
+    internal static KeyFile load_state(string dir) {
+        var kf = new KeyFile();
         try {
-            var info = File.new_for_path(path).query_info(
-                FileAttribute.STANDARD_SIZE, FileQueryInfoFlags.NONE);
-            return info.get_size();
+            kf.load_from_file(Path.build_filename(dir, STATE_FILE), KeyFileFlags.NONE);
         } catch (Error e) {
-            return 0;
+            // No state file yet (new package) or it's unreadable/corrupt —
+            // either way, treat it as "nothing recorded" and start fresh.
+        }
+        return kf;
+    }
+
+    internal static bool state_get(string dir, string key) {
+        var kf = load_state(dir);
+        try {
+            return kf.get_boolean(STATE_GROUP, key);
+        } catch (Error e) {
+            return false; // key not present yet
         }
     }
 
-    static void mark(string dir, string marker) {
+    internal static void state_set(string dir, string key, bool value) {
+        var kf = load_state(dir);
+        kf.set_boolean(STATE_GROUP, key, value);
         try {
-            FileUtils.set_contents(Path.build_filename(dir, marker), "1\n");
+            FileUtils.set_contents(Path.build_filename(dir, STATE_FILE), kf.to_data());
         } catch (Error e) {
-            warning("could not write marker %s: %s", marker, e.message);
+            warning("could not write state for %s: %s", dir, e.message);
         }
     }
 
-    static bool has_mark(string dir, string marker) {
-        return regular_file_size(Path.build_filename(dir, marker)) > 0;
+    // Resets a package's state to "nothing done yet" — used when git has a
+    // newer version than what's cached in the install prefix.
+    internal static void state_clear(string dir) {
+        var kf = new KeyFile();
+        kf.set_boolean(STATE_GROUP, "downloaded", false);
+        kf.set_boolean(STATE_GROUP, "extracted", false);
+        kf.set_boolean(STATE_GROUP, "installed", false);
+        try {
+            FileUtils.set_contents(Path.build_filename(dir, STATE_FILE), kf.to_data());
+        } catch (Error e) {
+            warning("could not reset state for %s: %s", dir, e.message);
+        }
     }
 
     // Runs argv, discarding its stdout/stderr, and returns whether it
@@ -373,11 +446,8 @@ public class Ewpi : Object {
                     string text;
                     FileUtils.get_contents(cached_path, out text);
                     var cached = Package.parse(cached_path, text);
-                    if (cached != null && pkg.newer_than(cached)) {
-                        FileUtils.unlink(Path.build_filename(dst_dir, "downloaded"));
-                        FileUtils.unlink(Path.build_filename(dst_dir, "extracted"));
-                        FileUtils.unlink(Path.build_filename(dst_dir, "installed"));
-                    }
+                    if (cached != null && pkg.newer_than(cached))
+                        state_clear(dst_dir);
                 } catch (Error e) {
                     // no cached descriptor yet; nothing to compare against
                 }
@@ -405,15 +475,15 @@ public class Ewpi : Object {
             warning("could not stage common.sh: %s", err2);
     }
 
-    // Sets each package's downloaded/extracted/installed flags from the
-    // marker files in its destination directory.
+    // Sets each package's downloaded/extracted/installed flags from its
+    // state.ini in its destination directory.
     void refresh_status() {
         foreach (unowned string name in all_names) {
             var pkg = packages[name];
             string dir = Path.build_filename(package_dir_dst, name);
-            pkg.downloaded = has_mark(dir, "downloaded");
-            pkg.extracted = has_mark(dir, "extracted");
-            pkg.installed = has_mark(dir, "installed");
+            pkg.downloaded = state_get(dir, "downloaded");
+            pkg.extracted = state_get(dir, "extracted");
+            pkg.installed = state_get(dir, "installed");
         }
     }
 
@@ -429,11 +499,10 @@ public class Ewpi : Object {
     // -------------------------------------------------------------
 
     // Post-order DFS: every dependency is placed before the package that
-    // needs it, and each package appears in `order` exactly once. Exits
-    // the program with a clear message on an unknown dependency or a
-    // dependency cycle, rather than silently dropping packages or (for a
-    // cycle) recursing forever.
-    void resolve_tree(string root) {
+    // needs it, and each package appears in `order` exactly once. Throws
+    // instead of exiting the process directly, so callers (main program
+    // or tests) decide how to report it.
+    internal void resolve_tree(string root) throws ResolveError {
         var visited = new HashTable<string, bool>(str_hash, str_equal);
         var on_stack = new HashTable<string, bool>(str_hash, str_equal);
         var path = new Array<string>();
@@ -446,18 +515,17 @@ public class Ewpi : Object {
 
     void resolve_tree_visit(string name, HashTable<string, bool> visited,
                              HashTable<string, bool> on_stack, Array<string> path,
-                             Array<string> result) {
+                             Array<string> result) throws ResolveError {
         var pkg = packages[name];
         if (pkg == null) {
-            stdout.printf("Unknown dependency '%s' (via %s), exiting...\n",
-                          name, path_to_string(path));
-            Process.exit(1);
+            throw new ResolveError.UNKNOWN_DEPENDENCY(
+                "unknown dependency '%s' (via %s)", name, path_to_string(path));
         }
 
         if (on_stack.contains(name)) {
             path.append_val(name);
-            stdout.printf("Dependency cycle detected: %s, exiting...\n", path_to_string(path));
-            Process.exit(1);
+            throw new ResolveError.CYCLE(
+                "dependency cycle detected: %s", path_to_string(path));
         }
         if (visited.contains(name))
             return;
@@ -544,12 +612,135 @@ public class Ewpi : Object {
     // Download / extract / install / clean / strip / nsis
     // -------------------------------------------------------------
 
+    // Fetches `url` into `dest_path` via libsoup3 instead of shelling out
+    // to wget. libsoup follows redirects and validates TLS the same way a
+    // browser would, so unlike the original wget invocation this needs no
+    // --no-check-certificate escape hatch.
+    static bool download_file(string url, string dest_path, out string? error_out) {
+        error_out = null;
+        try {
+            var session = new Soup.Session();
+            var msg = new Soup.Message("GET", url);
+            if (msg == null) {
+                error_out = "invalid URL '%s'".printf(url);
+                return false;
+            }
+
+            InputStream in_stream = session.send(msg);
+            uint status = msg.get_status();
+            if (status >= 300) {
+                error_out = "HTTP %u %s".printf(status, msg.get_reason_phrase());
+                return false;
+            }
+
+            var out_file = File.new_for_path(dest_path);
+            var out_stream = out_file.replace(null, false, FileCreateFlags.REPLACE_DESTINATION);
+            out_stream.splice(in_stream,
+                OutputStreamSpliceFlags.CLOSE_SOURCE | OutputStreamSpliceFlags.CLOSE_TARGET);
+            return true;
+        } catch (Error e) {
+            error_out = e.message;
+            return false;
+        }
+    }
+
+    static bool ggit_initialized = false;
+
+    // Clones `url` into `dest_dir` via libgit2-glib instead of shelling
+    // out to git. Non-recursive, matching the original plain `git clone`
+    // (no submodule handling either way).
+    static bool clone_repo(string url, string dest_dir, out string? error_out) {
+        error_out = null;
+        if (!ggit_initialized) {
+            Ggit.init();
+            ggit_initialized = true;
+        }
+        try {
+            var repo = Ggit.Repository.clone(url, File.new_for_path(dest_dir), null);
+            return repo != null;
+        } catch (Error e) {
+            error_out = e.message;
+            return false;
+        }
+    }
+
+    // Extracts `src_path` into `dest_dir` via libarchive instead of
+    // shelling out to tar. libarchive auto-detects the compression filter
+    // (gzip/bzip2/xz/...) and container format from the file itself, so
+    // — unlike the original, which branched on the tarball's extension to
+    // pick tar's -z/-j/-J flag — there is no extension sniffing here at
+    // all; whatever tarname's actual suffix is, this just works.
+    static bool extract_archive(string src_path, string dest_dir, bool verbose,
+                                 out string? error_out) {
+        error_out = null;
+
+        var reader = new Archive.Read();
+        reader.support_filter_all();
+        reader.support_format_all();
+
+        var writer = new Archive.WriteDisk();
+        writer.set_options(Archive.ExtractFlags.TIME | Archive.ExtractFlags.PERM |
+                            Archive.ExtractFlags.ACL | Archive.ExtractFlags.FFLAGS);
+        writer.set_standard_lookup();
+
+        if (reader.open_filename(src_path, 10240) != Archive.Result.OK) {
+            error_out = reader.error_string();
+            return false;
+        }
+
+        while (true) {
+            unowned Archive.Entry entry;
+            var r = reader.next_header(out entry);
+            if (r == Archive.Result.EOF)
+                break;
+            if (r != Archive.Result.OK && r != Archive.Result.WARN) {
+                error_out = reader.error_string();
+                reader.close();
+                writer.close();
+                return false;
+            }
+
+            if (verbose)
+                stdout.printf("  %s\n", entry.pathname());
+
+            entry.set_pathname(Path.build_filename(dest_dir, entry.pathname()));
+
+            r = writer.write_header(entry);
+            if (r != Archive.Result.OK && r != Archive.Result.WARN) {
+                // Matches tar's own behaviour on a single bad entry: warn
+                // and keep going rather than aborting the whole archive.
+                warning("%s: %s", src_path, writer.error_string());
+                continue;
+            }
+
+            unowned uint8[] buf;
+            Archive.int64_t offset;
+            while (true) {
+                r = reader.read_data_block(out buf, out offset);
+                if (r == Archive.Result.EOF)
+                    break;
+                if (r != Archive.Result.OK) {
+                    error_out = reader.error_string();
+                    reader.close();
+                    writer.close();
+                    return false;
+                }
+                writer.write_data_block(buf, offset);
+            }
+            writer.finish_entry();
+        }
+
+        reader.close();
+        writer.close();
+        return true;
+    }
+
     void download_all() {
         int pending = 0;
         foreach (unowned string name in order) {
             var pkg = packages[name];
             string dst = Path.build_filename(package_dir_dst, name);
-            if (has_mark(dst, "downloaded"))
+            if (state_get(dst, "downloaded"))
                 pkg.downloaded = true;
             else
                 pending++;
@@ -564,54 +755,27 @@ public class Ewpi : Object {
             if (pkg.downloaded) continue;
 
             string dst = Path.build_filename(package_dir_dst, name);
-            string err = "";
+            string? err;
             bool ok;
             if (pkg.is_git) {
-                try {
-                    Ggit.init();
-
-                    // Strip ".git" from the URL basename (pkg.tarname) to match git's default folder naming
-                    string repo_name = pkg.tarname.has_suffix(".git")
-                        ? pkg.tarname.substring(0, pkg.tarname.length - 4)
-                        : pkg.tarname;
-
-                    var location = File.new_for_path(Path.build_filename(dst, repo_name));
-                    var clone_opts = new Ggit.CloneOptions();
-
-                    Ggit.Repository.clone(pkg.url, location, clone_opts);
-                    ok = true;
-                } catch (Error e) {
-                    err = e.message;
-                    ok = false;
-                }
+                // Matches what a plain `git clone <url>` run inside `dst`
+                // would name the checkout: the URL's last path segment
+                // with a trailing ".git" stripped.
+                string repo_dir = pkg.tarname.has_suffix(".git")
+                    ? pkg.tarname.substring(0, pkg.tarname.length - 4) : pkg.tarname;
+                ok = clone_repo(pkg.url, Path.build_filename(dst, repo_dir), out err);
             } else {
-                try {
-                    var message = new Soup.Message("GET", pkg.url);
-                    var session = new Soup.Session();
-                    Object.set(session, "ssl-strict", false);
-                    var input_stream = session.send(message, null);
-
-                    var file = File.new_for_path(Path.build_filename(dst, pkg.tarname));
-                    var output_stream = file.replace(null, false, FileCreateFlags.NONE, null);
-
-                    // Splice handles the buffered read/write loop automatically
-                    output_stream.splice(input_stream,
-                        OutputStreamSpliceFlags.CLOSE_SOURCE | OutputStreamSpliceFlags.CLOSE_TARGET,
-                        null);
-                    ok = true;
-                } catch (Error e) {
-                    err = e.message;
-                    ok = false;
-                }
+                ok = download_file(pkg.url, Path.build_filename(dst, pkg.tarname), out err);
             }
+
             if (!ok) {
                 stdout.printf("error while downloading package %s: %s\n", pkg.name, err);
                 Process.exit(1);
             }
 
-            mark(dst, "downloaded");
+            state_set(dst, "downloaded", true);
             if (pkg.is_git)
-                mark(dst, "extracted"); // a git clone is already "extracted"
+                state_set(dst, "extracted", true); // a git clone is already "extracted"
         }
     }
 
@@ -620,7 +784,7 @@ public class Ewpi : Object {
         foreach (unowned string name in order) {
             var pkg = packages[name];
             string dst = Path.build_filename(package_dir_dst, name);
-            if (has_mark(dst, "extracted"))
+            if (state_get(dst, "extracted"))
                 pkg.extracted = true;
             else
                 pending++;
@@ -635,30 +799,16 @@ public class Ewpi : Object {
             var pkg = packages[name];
             if (pkg.extracted) continue;
 
-            int dot = pkg.tarname.last_index_of_char('.');
-            string ext = (dot >= 0) ? pkg.tarname.substring(dot + 1) : "";
-
-            string[] tar_argv = { "tar" };
-            string flags = verbose ? "xv" : "x";
-            if (ext == "gz" || ext == "tgz")
-                flags += "z";
-            else if (ext == "bz2")
-                flags += "j";
-            else
-                flags += "Jh";
-            flags += "f";
-            tar_argv += flags;
-            tar_argv += pkg.tarname;
-
             show_progress(c, pending, pkg.name, pkg.version);
 
             string dst = Path.build_filename(package_dir_dst, name);
+            string src = Path.build_filename(dst, pkg.tarname);
             string? err;
-            if (!spawn_visible(tar_argv, out err, dst)) {
+            if (!extract_archive(src, dst, verbose, out err)) {
                 stdout.printf(" Can not extract %s: %s\n", pkg.tarname, err);
                 Process.exit(1);
             }
-            mark(dst, "extracted");
+            state_set(dst, "extracted", true);
             c++;
         }
 
@@ -691,7 +841,7 @@ public class Ewpi : Object {
                 stdout.printf(" Can not install %s: %s\n", pkg.name, err);
                 Process.exit(1);
             }
-            mark(dst, "installed");
+            state_set(dst, "installed", true);
             c++;
         }
 
@@ -699,7 +849,7 @@ public class Ewpi : Object {
         stdout.printf("\n");
     }
 
-    static void remove_recursive(string path) {
+    internal static void remove_recursive(string path) {
         if (path_is_dir(path)) {
             Dir dir;
             try {
@@ -803,21 +953,22 @@ public class Ewpi : Object {
     // Orchestration
     // -------------------------------------------------------------
 
-    public int run(string prefix, string host, string arch, string jobopt,
-                    string winver, bool strip, bool nsis, bool verbose,
-                    bool efl, bool cleaning) {
-        stdout.printf(":: Configuration...\n");
-        stdout.printf("  prefix:    %s\n", prefix);
-        stdout.printf("  host:      %s\n", host);
-        stdout.printf("  arch:      %s\n", arch);
-        stdout.printf("  strip:     %s\n", strip ? "yes" : "no");
-        stdout.printf("  installer: %s\n", nsis ? "yes" : "no");
-        stdout.printf("  verbose:   %s\n", verbose ? "yes" : "no");
-        stdout.printf("  efl:       %s\n", efl ? "yes" : "no");
-        stdout.printf("  jobs:      %s\n", jobopt);
-        stdout.printf("\n");
-        stdout.flush();
+    // -------------------------------------------------------------
+    // Orchestration
+    // -------------------------------------------------------------
 
+    // Figures out what needs to be done: checks the toolchain, loads and
+    // stages package descriptors, refreshes downloaded/extracted/installed
+    // status from state.ini files, and resolves the dependency-ordered
+    // build list into `order`. Returns non-zero (with a message already
+    // printed) on failure.
+    //
+    // Split out from run() so a future mode that only needs the plan —
+    // e.g. a --dry-run that prints `order` without building anything, or
+    // a --clean that skips straight to clean_all() — doesn't have to
+    // thread a flag through download_all()/extract_all()/install_all()
+    // to get there; it just doesn't call execute().
+    public int plan(string prefix, string host, string arch, bool efl) {
         stdout.printf(":: Checking requirements...\n");
         if (!check_requirements(host)) {
             stdout.printf("one of the requirements is not found, exiting...\n");
@@ -837,11 +988,25 @@ public class Ewpi : Object {
 
         stdout.printf(":: Build the dependency tree...\n");
         stdout.flush();
-        resolve_tree("efl");
+        try {
+            resolve_tree("efl");
+        } catch (ResolveError e) {
+            stdout.printf("%s, exiting...\n", e.message);
+            return 1;
+        }
         if (!efl && order.length > 0 && order[order.length - 1] == "efl")
             order = order[0:order.length - 1];
 
         print_pending();
+        return 0;
+    }
+
+    // Carries out a successful plan(): download, extract, install, then
+    // whichever of strip/nsis/clean were requested. `order`/`packages`
+    // must already be populated (i.e. plan() returned 0).
+    public void execute(string prefix, string host, string arch, string jobopt,
+                         string winver, bool strip, bool nsis, bool verbose,
+                         bool efl, bool cleaning) {
         download_all();
         compute_name_field_width();
         extract_all(verbose);
@@ -853,14 +1018,41 @@ public class Ewpi : Object {
             build_nsis_installer(prefix, host, winver, efl);
         if (cleaning)
             clean_all();
+    }
 
+    // The full pipeline, as the CLI uses it: plan, then execute if the
+    // plan succeeded.
+    public int run(string prefix, string host, string arch, string jobopt,
+                    string winver, bool strip, bool nsis, bool verbose,
+                    bool efl, bool cleaning) {
+        stdout.printf(":: Configuration...\n");
+        stdout.printf("  prefix:    %s\n", prefix);
+        stdout.printf("  host:      %s\n", host);
+        stdout.printf("  arch:      %s\n", arch);
+        stdout.printf("  strip:     %s\n", strip ? "yes" : "no");
+        stdout.printf("  installer: %s\n", nsis ? "yes" : "no");
+        stdout.printf("  verbose:   %s\n", verbose ? "yes" : "no");
+        stdout.printf("  efl:       %s\n", efl ? "yes" : "no");
+        stdout.printf("  jobs:      %s\n", jobopt);
+        stdout.printf("\n");
+        stdout.flush();
+
+        int rc = plan(prefix, host, arch, efl);
+        if (rc != 0)
+            return rc;
+
+        execute(prefix, host, arch, jobopt, winver, strip, nsis, verbose, efl, cleaning);
         return 0;
     }
 }
 
+} // namespace Ewpi
+
 // ---------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------
+
+#if !EWPI_TEST
 
 // GLib.OptionContext gives us "--opt=value" and "--opt value" for free,
 // automatic type coercion, and a proper error (not a silent "unknown
@@ -927,7 +1119,7 @@ int main(string[] args) {
         return 0;
     }
     if (show_version) {
-        stdout.printf("Ewpi version %d.%d\n", Ewpi.VMAJ, Ewpi.VMIN);
+        stdout.printf("Ewpi version %d.%d\n", Ewpi.Installer.VMAJ, Ewpi.Installer.VMIN);
         return 0;
     }
 
@@ -968,6 +1160,231 @@ int main(string[] args) {
         return 1;
     }
 
-    var ewpi = new Ewpi();
+    var ewpi = new Ewpi.Installer();
     return ewpi.run(prefix, host, arch, jobopt, winver, strip, nsis, verbose, efl, cleaning);
 }
+
+#endif // !EWPI_TEST
+
+// ---------------------------------------------------------------------
+// Test suite (built only with -D EWPI_TEST)
+// ---------------------------------------------------------------------
+
+#if EWPI_TEST
+
+namespace Ewpi.Tests {
+
+    Package make_package(string name, string version, string url, string[] deps) {
+        var text = new StringBuilder();
+        text.append_printf("name: %s\n", name);
+        text.append_printf("version: %s\n", version);
+        text.append_printf("url: %s\n", url);
+        text.append_printf("deps: %s\n", string.joinv(" ", deps));
+        var pkg = Package.parse("<test>/%s.ewpi".printf(name), text.str);
+        assert(pkg != null);
+        return pkg;
+    }
+
+    void test_parse_valid() {
+        var pkg = Package.parse("test/libbar.ewpi",
+            "name: libbar\nversion: 2.0.0\nurl: https://example.com/libbar.git\ndeps: libfoo other\n");
+        assert(pkg != null);
+        assert(pkg.name == "libbar");
+        assert(pkg.vmaj == 2 && pkg.vmin == 0 && pkg.vmic == 0 && pkg.vrev == 0);
+        assert(pkg.is_git == true);
+        assert(pkg.tarname == "libbar.git");
+        assert(pkg.deps.length == 2);
+        assert(pkg.deps[0] == "libfoo" && pkg.deps[1] == "other");
+    }
+
+    void test_parse_with_revision() {
+        var pkg = Package.parse("test/rev.ewpi",
+            "name: rev\nversion: 1.2.3-4\nurl: https://example.com/rev.tar.bz2\ndeps:\n");
+        assert(pkg != null);
+        assert(pkg.vmaj == 1 && pkg.vmin == 2 && pkg.vmic == 3 && pkg.vrev == 4);
+        assert(pkg.is_git == false);
+        assert(pkg.tarname == "rev.tar.bz2");
+        assert(pkg.deps.length == 0);
+    }
+
+    void test_parse_rejects_malformed_version() {
+        Test.expect_message(null, LogLevelFlags.LEVEL_WARNING, "*malformed version*");
+        var pkg = Package.parse("test/bad.ewpi",
+            "name: bad\nversion: 1.x.0\nurl: https://example.com/bad.tar.gz\ndeps:\n");
+        assert(pkg == null);
+        Test.assert_expected_messages();
+    }
+
+    void test_parse_rejects_missing_url() {
+        Test.expect_message(null, LogLevelFlags.LEVEL_WARNING, "*missing 'url:'*");
+        var pkg = Package.parse("test/nourl.ewpi", "name: nourl\nversion: 1.0\ndeps:\n");
+        assert(pkg == null);
+        Test.assert_expected_messages();
+    }
+
+    void test_parse_rejects_missing_name() {
+        Test.expect_message(null, LogLevelFlags.LEVEL_WARNING, "*missing 'name:'*");
+        var pkg = Package.parse("test/noname.ewpi",
+            "version: 1.0\nurl: https://example.com/x.tar.gz\ndeps:\n");
+        assert(pkg == null);
+        Test.assert_expected_messages();
+    }
+
+    void test_newer_than() {
+        var v1 = make_package("p", "1.2.3-1", "https://example.com/p.tar.gz", {});
+        var v2 = make_package("p", "1.2.3-2", "https://example.com/p.tar.gz", {});
+        var v3 = make_package("p", "1.3.0", "https://example.com/p.tar.gz", {});
+        assert(v2.newer_than(v1) == true);
+        assert(v1.newer_than(v2) == false);
+        assert(v3.newer_than(v2) == true);
+    }
+
+    // Creates a fresh temp directory for a single test to read/write
+    // state.ini in, so tests don't share or leak filesystem state.
+    string make_temp_dir() {
+        try {
+            return DirUtils.make_tmp("ewpi-test-XXXXXX");
+        } catch (Error e) {
+            error("could not create temp dir: %s", e.message);
+        }
+    }
+
+    void test_state_defaults_to_false() {
+        string dir = make_temp_dir();
+        assert(Installer.state_get(dir, "downloaded") == false);
+        assert(Installer.state_get(dir, "extracted") == false);
+        assert(Installer.state_get(dir, "installed") == false);
+        Installer.remove_recursive(dir);
+    }
+
+    void test_state_set_persists_and_is_independent_per_key() {
+        string dir = make_temp_dir();
+        Installer.state_set(dir, "downloaded", true);
+        assert(Installer.state_get(dir, "downloaded") == true);
+        assert(Installer.state_get(dir, "extracted") == false);
+
+        Installer.state_set(dir, "extracted", true);
+        assert(Installer.state_get(dir, "downloaded") == true); // unaffected
+        assert(Installer.state_get(dir, "extracted") == true);
+        Installer.remove_recursive(dir);
+    }
+
+    void test_state_clear_resets_all_three_flags() {
+        string dir = make_temp_dir();
+        Installer.state_set(dir, "downloaded", true);
+        Installer.state_set(dir, "extracted", true);
+        Installer.state_set(dir, "installed", true);
+
+        Installer.state_clear(dir);
+
+        assert(Installer.state_get(dir, "downloaded") == false);
+        assert(Installer.state_get(dir, "extracted") == false);
+        assert(Installer.state_get(dir, "installed") == false);
+        Installer.remove_recursive(dir);
+    }
+
+    void test_resolve_tree_orders_dependencies_first() {
+        var inst = new Installer();
+        inst.packages["a"] = make_package("a", "1.0", "https://example.com/a.tar.gz", { "b" });
+        inst.packages["b"] = make_package("b", "1.0", "https://example.com/b.tar.gz", {});
+        inst.packages["efl"] = make_package("efl", "1.0", "https://example.com/efl.tar.gz", { "a" });
+
+        try {
+            inst.resolve_tree("efl");
+        } catch (ResolveError e) {
+            error("unexpected error: %s", e.message);
+        }
+
+        assert(inst.order.length == 3);
+        assert(inst.order[0] == "b");   // b has no deps: must come first
+        assert(inst.order[1] == "a");   // a depends on b
+        assert(inst.order[2] == "efl"); // efl depends on a, so it's last
+    }
+
+    void test_resolve_tree_dedupes_diamond_dependency() {
+        // efl -> {a, b}, both a and b -> c. c must appear exactly once,
+        // before both a and b.
+        var inst = new Installer();
+        inst.packages["c"] = make_package("c", "1.0", "https://example.com/c.tar.gz", {});
+        inst.packages["a"] = make_package("a", "1.0", "https://example.com/a.tar.gz", { "c" });
+        inst.packages["b"] = make_package("b", "1.0", "https://example.com/b.tar.gz", { "c" });
+        inst.packages["efl"] = make_package("efl", "1.0", "https://example.com/efl.tar.gz", { "a", "b" });
+
+        try {
+            inst.resolve_tree("efl");
+        } catch (ResolveError e) {
+            error("unexpected error: %s", e.message);
+        }
+
+        int c_count = 0;
+        foreach (unowned string name in inst.order)
+            if (name == "c") c_count++;
+        assert(c_count == 1);
+        assert(inst.order[0] == "c");
+        assert(inst.order[inst.order.length - 1] == "efl");
+    }
+
+    void test_resolve_tree_detects_cycle() {
+        var inst = new Installer();
+        inst.packages["a"] = make_package("a", "1.0", "https://example.com/a.tar.gz", { "b" });
+        inst.packages["b"] = make_package("b", "1.0", "https://example.com/b.tar.gz", { "a" });
+
+        bool caught = false;
+        try {
+            inst.resolve_tree("a");
+        } catch (ResolveError.CYCLE e) {
+            caught = true;
+        } catch (ResolveError e) {
+            error("expected a CYCLE error, got: %s", e.message);
+        }
+        assert(caught);
+    }
+
+    void test_resolve_tree_detects_unknown_dependency() {
+        var inst = new Installer();
+        inst.packages["a"] = make_package("a", "1.0", "https://example.com/a.tar.gz", { "ghost" });
+
+        bool caught = false;
+        try {
+            inst.resolve_tree("a");
+        } catch (ResolveError.UNKNOWN_DEPENDENCY e) {
+            caught = true;
+        } catch (ResolveError e) {
+            error("expected an UNKNOWN_DEPENDENCY error, got: %s", e.message);
+        }
+        assert(caught);
+    }
+
+} // namespace Ewpi.Tests
+
+int main(string[] args) {
+    Test.init(ref args);
+
+    Test.add_func("/package/parse-valid", Ewpi.Tests.test_parse_valid);
+    Test.add_func("/package/parse-with-revision", Ewpi.Tests.test_parse_with_revision);
+    Test.add_func("/package/parse-rejects-malformed-version",
+                  Ewpi.Tests.test_parse_rejects_malformed_version);
+    Test.add_func("/package/parse-rejects-missing-url",
+                  Ewpi.Tests.test_parse_rejects_missing_url);
+    Test.add_func("/package/parse-rejects-missing-name",
+                  Ewpi.Tests.test_parse_rejects_missing_name);
+    Test.add_func("/package/newer-than", Ewpi.Tests.test_newer_than);
+
+    Test.add_func("/state/defaults-to-false", Ewpi.Tests.test_state_defaults_to_false);
+    Test.add_func("/state/set-persists-independent-keys",
+                  Ewpi.Tests.test_state_set_persists_and_is_independent_per_key);
+    Test.add_func("/state/clear-resets-all-flags",
+                  Ewpi.Tests.test_state_clear_resets_all_three_flags);
+
+    Test.add_func("/tree/orders-dependencies-first",
+                  Ewpi.Tests.test_resolve_tree_orders_dependencies_first);
+    Test.add_func("/tree/dedupes-diamond-dependency",
+                  Ewpi.Tests.test_resolve_tree_dedupes_diamond_dependency);
+    Test.add_func("/tree/detects-cycle", Ewpi.Tests.test_resolve_tree_detects_cycle);
+    Test.add_func("/tree/detects-unknown-dependency",
+                  Ewpi.Tests.test_resolve_tree_detects_unknown_dependency);
+
+    return Test.run();
+}
+
+#endif // EWPI_TEST
