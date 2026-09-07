@@ -9,7 +9,7 @@ function f_setup
                 msys2) return 0 ;;
                 debian | ubuntu) sudo bash -c '
                     apt-get update
-                    apt-get install -y ca-certificates valac clang-{tidy,format} shfmt {cpp,shell}check meson auto{conf,make} {lib,its}tool gettext cmake {y,n}asm gperf python3 perl ninja-build pkgconf g++-mingw-w64-x86-64 libgomp1 gcc nsis bison flex make lib{archive,soup-3.0,gee-0.8,git2-glib-1.0}-dev
+                    apt-get install -y ca-certificates glib-networking valac clang-{tidy,format} shfmt {cpp,shell}check meson auto{conf,make} {lib,its}tool gettext cmake {y,n}asm gperf python3 perl ninja-build pkgconf g++-mingw-w64-x86-64 libgomp1 gcc nsis bison flex make lib{archive,soup-3.0,gee-0.8,git2-glib-1.0}-dev
                     update-ca-certificates
                 ' ;;
                 fedora | alma) sudo dnf install -y shfmt {cpp,shell}check meson auto{conf,make} {lib,its}tool gettext cmake {y,n}asm gperf python{,3-pip} perl ninja-build pkgconf mingw32-{libgomp,gcc,gcc-c++,nsisb} bison flex make gcc-c++ lib{archive,git2-glib}-devel;;
