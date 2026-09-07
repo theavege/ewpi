@@ -4,7 +4,7 @@ function f_setup
 {
     if [[ -f '/etc/os-release' ]]; then
         source '/etc/os-release'
-        if ! command -v clang-tidy >/dev/null; then
+        if ! command -v valac >/dev/null; then
             case ${ID:?} in
                 msys2) return 0 ;;
                 debian | ubuntu) sudo bash -c '
