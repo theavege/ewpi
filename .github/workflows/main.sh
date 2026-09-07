@@ -32,6 +32,7 @@ declare -ar VAR=(
     --fatal-warnings
     --Xcc=-O3
     --cc=clang
+    --vapidir=/usr/share/vala/vapi
     --enable-{checking,mem-profiler,gobject-tracing}
     --pkg={gio-2.0,lib{soup-3.0,archive,git2-glib-1.0}}
 )
