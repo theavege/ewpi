@@ -564,7 +564,7 @@ public class Ewpi : Object {
             if (pkg.downloaded) continue;
 
             string dst = Path.build_filename(package_dir_dst, name);
-            string? err;
+            string err = "";
             bool ok;
             if (pkg.is_git) {
                 try {
