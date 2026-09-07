@@ -33,8 +33,9 @@ declare -ar VAR=(
     --fatal-warnings
     --Xcc=-O3
     --cc=clang
+    --run-args
     --enable-{checking,mem-profiler,gobject-tracing}
     --pkg={gio-2.0,lib{soup-3.0,archive,git2-glib-1.0}}
 )
 
-vala  "${VAR[@]}" src/main.vala --run-args --efl --insecure --verbose
+vala  "${VAR[@]}" src/main.vala --efl --insecure --verbose
