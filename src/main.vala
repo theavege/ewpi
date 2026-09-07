@@ -614,9 +614,23 @@ public class Installer : Object {
 
     // Fetches `url` into `dest_path` via libsoup3 instead of shelling out
     // to wget. libsoup follows redirects and validates TLS the same way a
-    // browser would, so unlike the original wget invocation this needs no
-    // --no-check-certificate escape hatch.
-    static bool download_file(string url, string dest_path, out string? error_out) {
+    // browser would — using the system's CA certificate store, via
+    // whatever GIO TLS backend (glib-networking) is installed.
+    //
+    // If that store is missing or empty — common in minimal/cross-compile
+    // build environments, and almost certainly why the original C ewpi.c
+    // ran wget with --no-check-certificate — every download fails with
+    // "Unacceptable TLS certificate" regardless of the actual package
+    // host. The real fix is installing/populating the system CA bundle
+    // (e.g. `apt install ca-certificates` and `update-ca-certificates`,
+    // or your distro's equivalent). `insecure`, wired up to --insecure,
+    // is the same escape hatch the original had, for when that isn't an
+    // option in a given build environment — it is not a default, it is
+    // only ever active if the person building explicitly asked for it.
+    static bool warned_insecure = false;
+
+    static bool download_file(string url, string dest_path, bool insecure,
+                               out string? error_out) {
         error_out = null;
         try {
             var session = new Soup.Session();
@@ -624,6 +638,14 @@ public class Installer : Object {
             if (msg == null) {
                 error_out = "invalid URL '%s'".printf(url);
                 return false;
+            }
+
+            if (insecure) {
+                if (!warned_insecure) {
+                    warning("--insecure: TLS certificate verification is disabled for all downloads");
+                    warned_insecure = true;
+                }
+                msg.accept_certificate.connect((cert, errors) => { return true; });
             }
 
             InputStream in_stream = session.send(msg);
@@ -649,6 +671,15 @@ public class Installer : Object {
     // Clones `url` into `dest_dir` via libgit2-glib instead of shelling
     // out to git. Non-recursive, matching the original plain `git clone`
     // (no submodule handling either way).
+    //
+    // NOTE: libgit2 validates TLS certificates against the same system CA
+    // store as libsoup, so an https:// git URL hits the identical
+    // "Unacceptable TLS certificate" failure on a system with a missing
+    // CA bundle — but the RemoteCallbacks certificate-check hook isn't
+    // exposed by this system's ggit-1.0.vapi, so --insecure can't bypass
+    // it here the way it does for download_file(). If you hit that on a
+    // git-sourced package, the CA bundle fix above is the only option
+    // (short of extending the vapi to expose certificate_check).
     static bool clone_repo(string url, string dest_dir, out string? error_out) {
         error_out = null;
         if (!ggit_initialized) {
@@ -735,7 +766,7 @@ public class Installer : Object {
         return true;
     }
 
-    void download_all() {
+    void download_all(bool insecure) {
         int pending = 0;
         foreach (unowned string name in order) {
             var pkg = packages[name];
@@ -765,7 +796,7 @@ public class Installer : Object {
                     ? pkg.tarname.substring(0, pkg.tarname.length - 4) : pkg.tarname;
                 ok = clone_repo(pkg.url, Path.build_filename(dst, repo_dir), out err);
             } else {
-                ok = download_file(pkg.url, Path.build_filename(dst, pkg.tarname), out err);
+                ok = download_file(pkg.url, Path.build_filename(dst, pkg.tarname), insecure, out err);
             }
 
             if (!ok) {
@@ -1006,8 +1037,8 @@ public class Installer : Object {
     // must already be populated (i.e. plan() returned 0).
     public void execute(string prefix, string host, string arch, string jobopt,
                          string winver, bool strip, bool nsis, bool verbose,
-                         bool efl, bool cleaning) {
-        download_all();
+                         bool efl, bool cleaning, bool insecure) {
+        download_all(insecure);
         compute_name_field_width();
         extract_all(verbose);
         install_all(prefix, host, arch, jobopt, verbose, winver);
@@ -1024,7 +1055,7 @@ public class Installer : Object {
     // plan succeeded.
     public int run(string prefix, string host, string arch, string jobopt,
                     string winver, bool strip, bool nsis, bool verbose,
-                    bool efl, bool cleaning) {
+                    bool efl, bool cleaning, bool insecure) {
         stdout.printf(":: Configuration...\n");
         stdout.printf("  prefix:    %s\n", prefix);
         stdout.printf("  host:      %s\n", host);
@@ -1041,7 +1072,7 @@ public class Installer : Object {
         if (rc != 0)
             return rc;
 
-        execute(prefix, host, arch, jobopt, winver, strip, nsis, verbose, efl, cleaning);
+        execute(prefix, host, arch, jobopt, winver, strip, nsis, verbose, efl, cleaning, insecure);
         return 0;
     }
 }
@@ -1070,6 +1101,7 @@ int main(string[] args) {
     bool verbose = false;
     bool efl = false;
     bool cleaning = false;
+    bool insecure = false;
     bool show_help = false;
     bool show_version = false;
 
@@ -1095,6 +1127,10 @@ int main(string[] args) {
           "maximum number of used jobs [default=maximum]", "VAL" },
         { "clean", 0, 0, OptionArg.NONE, ref cleaning,
           "remove the archives and the created directories (not removed by default)", null },
+        { "insecure", 0, 0, OptionArg.NONE, ref insecure,
+          "skip TLS certificate verification for downloads (only for a build " +
+          "environment with a broken/missing CA certificate store; prefer fixing " +
+          "that store instead)", null },
         { null }
     };
 
@@ -1161,7 +1197,7 @@ int main(string[] args) {
     }
 
     var ewpi = new Ewpi.Installer();
-    return ewpi.run(prefix, host, arch, jobopt, winver, strip, nsis, verbose, efl, cleaning);
+    return ewpi.run(prefix, host, arch, jobopt, winver, strip, nsis, verbose, efl, cleaning, insecure);
 }
 
 #endif // !EWPI_TEST
