@@ -566,13 +566,48 @@ public class Ewpi : Object {
             string dst = Path.build_filename(package_dir_dst, name);
             string? err;
             bool ok;
-            if (pkg.is_git)
-                ok = spawn_visible({ "git", "clone", pkg.url }, out err, dst);
-            else
-                ok = spawn_visible(
-                    { "wget", "-q", "--show-progress", "--no-check-certificate", pkg.url },
-                    out err, dst);
-
+            if (pkg.is_git) {
+                try {
+                    Ggit.init();
+                    
+                    // Strip ".git" from the URL basename (pkg.tarname) to match git's default folder naming
+                    string repo_name = pkg.tarname.has_suffix(".git") 
+                        ? pkg.tarname.substring(0, pkg.tarname.length - 4) 
+                        : pkg.tarname;
+                        
+                    var location = File.new_for_path(Path.build_filename(dst, repo_name));
+                    var clone_opts = new Ggit.CloneOptions();
+                    
+                    Ggit.Repository.clone(pkg.url, location, clone_opts);
+                    ok = true;
+                } catch (Error e) {
+                    err = e.message;
+                    ok = false;
+                }
+            } else {
+                try {
+                    var session = new Soup.Session();
+                    
+                    // Disabling TLS database mimics wget's --no-check-certificate flag
+                    session.set_tls_database(null); 
+                    
+                    var message = new Soup.Message("GET", pkg.url);
+                    var input_stream = session.send(message, null);
+                    
+                    string out_file = Path.build_filename(dst, pkg.tarname);
+                    var file = File.new_for_path(out_file);
+                    var output_stream = file.replace(null, false, FileCreateFlags.NONE, null);
+                    
+                    // Splice handles the buffered read/write loop automatically
+                    output_stream.splice(input_stream, 
+                        OutputStreamSpliceFlags.CLOSE_SOURCE | OutputStreamSpliceFlags.CLOSE_TARGET, 
+                        null);
+                    ok = true;
+                } catch (Error e) {
+                    err = e.message;
+                    ok = false;
+                }
+            }
             if (!ok) {
                 stdout.printf("error while downloading package %s: %s\n", pkg.name, err);
                 Process.exit(1);

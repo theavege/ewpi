@@ -9,9 +9,9 @@ function f_setup
                 msys2) return 0 ;;
                 debian | ubuntu) sudo bash -c '
                     apt-get update
-                    apt-get install -y valac clang-{tidy,format} shfmt {cpp,shell}check meson auto{conf,make} {lib,its}tool gettext cmake {y,n}asm gperf python3 perl ninja-build pkgconf g++-mingw-w64-x86-64 libgomp1 gcc nsis bison flex make lib{soup-3.0,gee-0.8}-dev
+                    apt-get install -y valac clang-{tidy,format} shfmt {cpp,shell}check meson auto{conf,make} {lib,its}tool gettext cmake {y,n}asm gperf python3 perl ninja-build pkgconf g++-mingw-w64-x86-64 libgomp1 gcc nsis bison flex make lib{soup-3.0,gee-0.8,git2-glib-1.0}-dev
                 ' ;;
-                fedora | alma) sudo dnf install -y shfmt {cpp,shell}check meson auto{conf,make} libtool gettext cmake {y,n}asm gperf python{,3-pip} perl ninja-build pkgconf mingw32-{libgomp,gcc,gcc-c++,nsisb} bison flex make gcc-c++ ;;
+                fedora | alma) sudo dnf install -y shfmt {cpp,shell}check meson auto{conf,make} libtool gettext cmake {y,n}asm gperf python{,3-pip} perl ninja-build pkgconf mingw32-{libgomp,gcc,gcc-c++,nsisb} bison flex make gcc-c++ lib{archive,git2-glib}-devel;;
             esac 1>/dev/null
         fi
         #~ shellcheck --external-sources "${0}" packages/*/*.sh
@@ -34,7 +34,7 @@ declare -ar VAR=(
     --Xcc=-O3
     --cc=clang
     --enable-{checking,mem-profiler,gobject-tracing}
-    --pkg={gio-2.0,libsoup-3.0}
+    --pkg={gio-2.0,lib{soup-3.0,archive,git2-glib-1.0}}
 )
 
 vala  "${VAR[@]}" src/main.vala --verbose
