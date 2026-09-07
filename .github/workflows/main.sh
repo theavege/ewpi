@@ -23,7 +23,7 @@ function f_setup
 
 set -xeuo pipefail
 
-#~ f_setup
+f_setup
 #~ command -v meson make{,nsis} python perl ninja {y,n}asm gperf wget bison flex itstool
 #~ gcc -W{error,all,extra,pedantic,shadow,conversion} -std=c99 -O2 -o ewpi{,*.c}
 
