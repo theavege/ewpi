@@ -34,7 +34,7 @@ declare -ar VAR=(
     --Xcc=-O3
     --cc=clang
     --enable-{checking,mem-profiler,gobject-tracing}
-    --pkg={gee-0.8,gio-2.0}
+    --pkg=gio-2.0
 )
 
 vala  "${VAR[@]}" src/main.vala --verbose
