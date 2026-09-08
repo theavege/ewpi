@@ -95,10 +95,12 @@ static void *
 _ew_str_get(const unsigned char *start, const unsigned char *end)
 {
     char *str;
+    size_t len;
 
-    str = (char *)malloc(end - start + 1);
-    memcpy(str, start, end - start);
-    str[end - start] = '\0';
+    len = (size_t)(end - start);
+    str = (char *)malloc(len + 1);
+    memcpy(str, start, len);
+    str[len] = '\0';
 
     return str;
 }
@@ -171,13 +173,13 @@ _ew_path_exists(const char *path)
     return S_ISDIR(buf.st_mode);
 }
 
-static int
+static size_t
 _ew_file_exists(const char *file)
 {
     struct stat buf;
 
     if ((stat(file, &buf) == 0) && S_ISREG(buf.st_mode))
-        return buf.st_size;
+        return (size_t)buf.st_size;
 
     return 0;
 }
@@ -186,10 +188,10 @@ static int
 _ew_mkdir(const char *pathname, int mode)
 {
 #if _WIN32
-    return mkdir(pathname);
     (void)mode;
+    return mkdir(pathname);
 #else
-    return mkdir(pathname, mode);
+    return mkdir(pathname, (mode_t)mode);
 #endif
 }
 
@@ -416,6 +418,13 @@ _ew_version_get(char *ver, int *maj, int *min, int *mic, int *rev)
     *mic = 0;
     *rev = 0;
 
+    if (strlen(ver) >= sizeof(buf))
+    {
+        printf("version string too long: %s\n", ver);
+        fflush(stdout);
+        return;
+    }
+
     strcpy(buf, ver);
     start = buf;
 
@@ -455,18 +464,25 @@ static void
 _ew_packages_fill(Map *map, Package *pkg)
 {
     const unsigned char *iter;
+    const unsigned char *end;
 
     iter = map->base;
+    end = map->base + map->length;
 
-    while ((int)(iter - map->base) < (int)map->length)
+    while (iter < end)
     {
+        /* EWPI_NAME/VERSION/URL/DEPS peek up to 8 bytes ahead; make sure
+         * that stays within the mapped region before testing them. */
+        if ((end - iter) < 9)
+            break;
+
         if (EWPI_NAME(iter))
         {
             const unsigned char *iter2;
 
             iter += 6;
             iter2 = iter;
-            while (*iter != '\n') iter++;
+            while ((iter < end) && (*iter != '\n')) iter++;
             pkg->name = _ew_str_get(iter2, iter);
         }
         else if (EWPI_VERSION(iter))
@@ -475,7 +491,7 @@ _ew_packages_fill(Map *map, Package *pkg)
 
             iter += 9;
             iter2 = iter;
-            while (*iter != '\n') iter++;
+            while ((iter < end) && (*iter != '\n')) iter++;
             pkg->version = _ew_str_get(iter2, iter);
             _ew_version_get(pkg->version, &pkg->vmaj, &pkg->vmin, &pkg->vmic, &pkg->vrev);
         }
@@ -486,20 +502,26 @@ _ew_packages_fill(Map *map, Package *pkg)
 
             iter += 5;
             iter2 = iter;
-            while (*iter != '\n') iter++;
+            while ((iter < end) && (*iter != '\n')) iter++;
             pkg->url = _ew_str_get(iter2, iter);
             tarname = strrchr(pkg->url, '/');
-            tarname++;
-            pkg->tarname = strdup(tarname);
-            tarname = strrchr(tarname, '.');
-            tarname++;
-            if (strcmp(tarname, "git") == 0)
-                pkg->is_git = 1;
+            if (tarname)
+            {
+                tarname++;
+                pkg->tarname = strdup(tarname);
+                tarname = strrchr(tarname, '.');
+                if (tarname)
+                {
+                    tarname++;
+                    if (strcmp(tarname, "git") == 0)
+                        pkg->is_git = 1;
+                }
+            }
         }
         else if (EWPI_DEPS(iter))
         {
             iter += 5;
-            if (*iter == '\n')
+            if ((iter >= end) || (*iter == '\n'))
             {
                 pkg->deps_count = 0;
                 pkg->deps = NULL;
@@ -511,31 +533,37 @@ _ew_packages_fill(Map *map, Package *pkg)
 
                 iter2 = iter;
                 pkg->deps_count = 0;
-                while (*iter != '\n')
+                while ((iter < end) && (*iter != '\n'))
                 {
                     if (*iter == ' ')
                         pkg->deps_count++;
                     iter++;
                 }
-                pkg->deps = (char **)malloc(pkg->deps_count * sizeof(char *));
+                pkg->deps = (char **)malloc((size_t)pkg->deps_count * sizeof(char *));
                 j = 0;
                 iter2++;
                 iter = iter2;
-                while (*iter != '\n')
+                while ((iter < end) && (*iter != '\n'))
                 {
                     if (*iter == ' ')
                     {
-                        pkg->deps[j] = (char *)malloc(iter - iter2 + 1);
-                        memcpy(pkg->deps[j], iter2, iter - iter2);
-                        pkg->deps[j][iter - iter2] = '\0';
+                        size_t dlen = (size_t)(iter - iter2);
+
+                        pkg->deps[j] = (char *)malloc(dlen + 1);
+                        memcpy(pkg->deps[j], iter2, dlen);
+                        pkg->deps[j][dlen] = '\0';
                         j++;
                         iter2 = iter + 1;
                     }
                     iter++;
                 }
-                pkg->deps[j] = (char *)malloc(iter - iter2 + 1);
-                memcpy(pkg->deps[j], iter2, iter - iter2);
-                pkg->deps[j][iter - iter2] = '\0';
+                {
+                    size_t dlen = (size_t)(iter - iter2);
+
+                    pkg->deps[j] = (char *)malloc(dlen + 1);
+                    memcpy(pkg->deps[j], iter2, dlen);
+                    pkg->deps[j][dlen] = '\0';
+                }
             }
         }
 
@@ -551,7 +579,7 @@ _ew_packages_get_git(void)
     struct dirent *f;
     Package *iter;
 
-    _ewpi_pkgs = (Package *)calloc(_ew_package_count_total, sizeof(Package));
+    _ewpi_pkgs = (Package *)calloc((size_t)_ew_package_count_total, sizeof(Package));
     if (!_ewpi_pkgs)
         return 0;
 
@@ -954,7 +982,9 @@ _ew_packages_download(void)
             strcat(buf, "/");
             strcat(buf, iter->name);
             strcat(buf, "/downloaded");
-            system(buf);
+            ret = system(buf);
+            if (ret != 0)
+                printf("Warning: could not mark %s as downloaded\n", iter->name);
             if (iter->is_git)
             {
                 strcpy(buf, "echo 1 > ");
@@ -962,7 +992,9 @@ _ew_packages_download(void)
                 strcat(buf, "/");
                 strcat(buf, iter->name);
                 strcat(buf, "/extracted");
-                system(buf);
+                ret = system(buf);
+                if (ret != 0)
+                    printf("Warning: could not mark %s as extracted\n", iter->name);
             }
         }
     }
@@ -978,7 +1010,7 @@ _ew_packages_longest_name()
     {
         iter = _ewpi_pkgs + _ew_package_index[i];
         if ((int)(strlen(iter->name) + 1 + strlen(iter->version)) > _ew_package_name_size_max)
-            _ew_package_name_size_max = strlen(iter->name) + 1 + strlen(iter->version);
+            _ew_package_name_size_max = (int)(strlen(iter->name) + 1 + strlen(iter->version));
     }
 }
 
@@ -1006,7 +1038,7 @@ _ew_packages_status_disp(int i, int count, const char *name, const char* version
         len2 = strlen(version);
         for (j = 0; j < len2; j++)
             *iter++ = version[j];
-        for (j = 0; j < (_ew_package_name_size_max  - (len + 1 + len2)); j++)
+        for (j = 0; j < ((size_t)_ew_package_name_size_max - (len + 1 + len2)); j++)
             *iter++ = ' ';
     }
     else
@@ -1130,7 +1162,9 @@ _ew_packages_extract(int verbose)
             strcat(buf, "/");
             strcat(buf, name);
             strcat(buf, "/extracted");
-            system(buf);
+            ret = system(buf);
+            if (ret != 0)
+                printf(" Warning: could not mark %s as extracted\n", name);
         }
 
         c++;
@@ -1186,7 +1220,9 @@ _ew_packages_install(const char *prefix, const char *host, const char *arch, con
             strcat(buf, "/");
             strcat(buf, name);
             strcat(buf, "/installed");
-            system(buf);
+            ret = system(buf);
+            if (ret != 0)
+                printf(" Warning: could not mark %s as installed\n", name);
         }
 
         c++;
@@ -1343,10 +1379,10 @@ _ew_recurse_strip(const char *path, const char *strip)
                     ext++;
                     if (strcmp(ext, "dll") == 0)
                     {
-                        char strip_cmd[4096];
+                        char strip_cmd[8192];
                         int ret;
 
-                        snprintf(strip_cmd, sizeof(strip_cmd), "%s %s",
+                        snprintf(strip_cmd, sizeof(strip_cmd) - 1, "%s %s",
                                  strip, file);
                         printf("  %s\n", file);
                         fflush(stdout);
@@ -1603,7 +1639,7 @@ int main(int argc, char *argv[])
 
     printf(":: Build the dependency tree...\n");
     fflush(stdout);
-    _ew_package_index = (int *)malloc(_ew_package_count_total * sizeof(int));
+    _ew_package_index = (int *)malloc((size_t)_ew_package_count_total * sizeof(int));
     if(!_ew_package_index)
         return 1;
 

@@ -1,4 +1,4 @@
 name: freetype
 version: 2.14.3
-url: http://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz
+url: https://deac-ams.dl.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.xz
 deps: zlib libpng bzip2 brotli
