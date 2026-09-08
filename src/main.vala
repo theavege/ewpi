@@ -629,41 +629,108 @@ public class Installer : Object {
     // only ever active if the person building explicitly asked for it.
     static bool warned_insecure = false;
 
-    static bool download_file(string url, string dest_path, bool insecure,
-                               out string? error_out) {
+    // wget's defaults retry a failed download up to 20 times with
+    // backoff; a single libsoup request has none of that built in, so a
+    // single transient hiccup — a mirror's 502, a dropped connection
+    // mid-transfer — would otherwise fail the whole (possibly hours-long)
+    // build immediately where the old wget invocation would likely have
+    // just quietly succeeded on retry. download_file() restores that:
+    // up to MAX_ATTEMPTS, with exponential backoff, but only for outcomes
+    // that retrying could plausibly fix — a definite 404/403/etc is
+    // reported immediately since trying again won't change the answer.
+    const int MAX_DOWNLOAD_ATTEMPTS = 5;
+    const uint MAX_RETRY_DELAY_SECONDS = 16;
+
+    // wget has no per-socket-operation timeout by default; a bare
+    // Soup.Session does — 60 seconds of no I/O activity on the
+    // connection fails the whole request with exactly this message
+    // ("Socket I/O timed out"), which a slow mirror, a large tarball, or
+    // a throttled/proxied connection can all trip well within normal
+    // operation. This is a background build tool, not an interactive
+    // fetch, so it's worth trading a slower failure for far fewer of
+    // them: 5 minutes per socket operation gives real headroom before
+    // even download_file()'s own retry loop below has to kick in.
+    const uint SOCKET_TIMEOUT_SECONDS = 300;
+
+    enum DownloadOutcome { OK, RETRY, FATAL }
+
+    static DownloadOutcome download_file_once(string url, string dest_path, bool insecure,
+                                               out string? error_out) {
         error_out = null;
+
+        var session = new Soup.Session();
+        session.timeout = SOCKET_TIMEOUT_SECONDS;
+        var msg = new Soup.Message("GET", url);
+        if (msg == null) {
+            error_out = "invalid URL '%s'".printf(url);
+            return DownloadOutcome.FATAL;
+        }
+
+        if (insecure) {
+            if (!warned_insecure) {
+                warning("--insecure: TLS certificate verification is disabled for all downloads");
+                warned_insecure = true;
+            }
+            msg.accept_certificate.connect((cert, errors) => { return true; });
+        }
+
+        InputStream in_stream;
         try {
-            var session = new Soup.Session();
-            var msg = new Soup.Message("GET", url);
-            if (msg == null) {
-                error_out = "invalid URL '%s'".printf(url);
-                return false;
-            }
+            in_stream = session.send(msg);
+        } catch (Error e) {
+            // DNS failure, connection refused/reset, TLS handshake abort,
+            // timeout, ... — all things a moment's wait can fix.
+            error_out = e.message;
+            return DownloadOutcome.RETRY;
+        }
 
-            if (insecure) {
-                if (!warned_insecure) {
-                    warning("--insecure: TLS certificate verification is disabled for all downloads");
-                    warned_insecure = true;
-                }
-                msg.accept_certificate.connect((cert, errors) => { return true; });
-            }
+        uint status = msg.get_status();
+        if (status >= 300) {
+            error_out = "HTTP %u %s".printf(status, msg.get_reason_phrase());
+            // 5xx (server/gateway trouble), 429 (rate limited), and 408
+            // (request timeout) are the statuses a retry can plausibly
+            // fix. A 404/403/401/etc won't change on retry — same as
+            // wget, which also gives up immediately on those.
+            bool transient = status == 429 || status == 408 ||
+                              (status >= 500 && status <= 504);
+            return transient ? DownloadOutcome.RETRY : DownloadOutcome.FATAL;
+        }
 
-            InputStream in_stream = session.send(msg);
-            uint status = msg.get_status();
-            if (status >= 300) {
-                error_out = "HTTP %u %s".printf(status, msg.get_reason_phrase());
-                return false;
-            }
-
+        try {
             var out_file = File.new_for_path(dest_path);
             var out_stream = out_file.replace(null, false, FileCreateFlags.REPLACE_DESTINATION);
             out_stream.splice(in_stream,
                 OutputStreamSpliceFlags.CLOSE_SOURCE | OutputStreamSpliceFlags.CLOSE_TARGET);
-            return true;
         } catch (Error e) {
+            // Connection dropped mid-transfer, disk hiccup, etc.
             error_out = e.message;
-            return false;
+            return DownloadOutcome.RETRY;
         }
+
+        return DownloadOutcome.OK;
+    }
+
+    static bool download_file(string url, string dest_path, bool insecure,
+                               out string? error_out) {
+        error_out = null;
+
+        for (int attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+            string? attempt_err;
+            var outcome = download_file_once(url, dest_path, insecure, out attempt_err);
+            if (outcome == DownloadOutcome.OK)
+                return true;
+
+            error_out = attempt_err;
+            if (outcome == DownloadOutcome.FATAL || attempt == MAX_DOWNLOAD_ATTEMPTS)
+                return false;
+
+            uint delay = uint.min(2u << (attempt - 1), MAX_RETRY_DELAY_SECONDS);
+            stdout.printf("  %s — retrying in %us (attempt %d/%d)...\n",
+                          attempt_err, delay, attempt + 1, MAX_DOWNLOAD_ATTEMPTS);
+            stdout.flush();
+            Thread<void*>.usleep(delay * 1000000);
+        }
+        return false;
     }
 
     static bool ggit_initialized = false;
