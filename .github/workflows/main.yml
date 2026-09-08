@@ -7,6 +7,9 @@ on:
   pull_request:
     branches:
       - master
+  push:
+    branches:
+      - master
 
 jobs:
   make:
@@ -24,7 +27,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup
+      - name: Setup on Windows
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
@@ -32,14 +35,20 @@ jobs:
           update: true
           install: base-devel autoconf automake libtool tar git wget python perl flex bison gettext-devel pkgconf make mingw-w64-x86_64-gettext-tools mingw-w64-x86_64-gperf mingw-w64-x86_64-nasm mingw-w64-x86_64-yasm mingw-w64-x86_64-cmake mingw-w64-x86_64-toolchain mingw-w64-x86_64-ninja mingw-w64-x86_64-meson mingw-w64-x86_64-nsis mingw-w64-x86_64-itstool mingw-w64-x86_64-gettext-tools mingw-w64-x86_64-gcc mingw-w64-x86_64-pkg-config mingw-w64-x86_64-vala mingw-w64-libsoup3 mingw-w64-libgee
 
+      - name: Setup on Windows
+        if: runner.os != 'Windows'
+        shell: msys2 {0}
+        run: |
+          bash -x .github/workflows/main.sh setup
+
       - name: Build on Windows
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          bash -x .github/workflows/main.sh
+          bash -x .github/workflows/main.sh build
 
       - name: Build on Unix
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          bash -x .github/workflows/main.sh
+          bash -x .github/workflows/main.sh build
