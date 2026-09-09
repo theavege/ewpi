@@ -174,7 +174,7 @@ Examples :
  * libvorbis 1.3.7 (BSD 3-clause)
  * libwavpack 5.9.0 (BSD 3-clause)
  * libwebp 1.6.0 (BSD 3-clause)
- * libxml2 2.15.3 (MIT)
+ * libxml2 2.15.4 (MIT)
  * libyuv 1.92.2 (BSD 3-clause)
  * luajit 2.1.20250914 (MIT + public domain for some parts)
  * lz4 1.10.0 (BSD 2-clause for the library)
@@ -187,7 +187,7 @@ Examples :
  * orc 0.4.41 (BSD 2-clause)
  * pixman 0.46.4 (MIT)
  * regex 1.2.1 (MIT)
- * taglib 2.3.1 (LGPL 2.1)
+ * taglib 2.3.2 (LGPL 2.1)
  * utfcpp 4.2.0 (BSL 1.0)
  * xz 5.8.3 (lzma : public domain)
  * zlib 1.3.2 (zlib license)
@@ -196,7 +196,7 @@ Examples :
 ### Libraries compatible with LGPL v3
 
  * libde265 1.1.2 (LGPL v3)
- * libheif 1.23.3 (LGPL v3)
+ * libheif 1.23.4 (LGPL v3)
 
 ### Libraries compatible with GPL v2
 
