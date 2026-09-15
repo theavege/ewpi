@@ -15,8 +15,8 @@ jobs:
     strategy:
       matrix:
         os:
-          - ubuntu-latest
-          # - windows-latest
+          # - ubuntu-latest
+          - windows-latest
         arch:
           - x86_64
 
@@ -28,19 +28,19 @@ jobs:
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: mingw64
+          msystem: ucrt64
           update: true
-          install: |
-            mingw-w64-ucrt-x86_64-efl
-            mingw-w64-ucrt-x86_64-rust
-            mingw-w64-ucrt-x86_64-pkg-config
-            mingw-w64-ucrt-x86_64-cargo-msrv
-            mingw-w64-ucrt-x86_64-pkg-config
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-vala
-            mingw-w64-ucrt-x86_64-libsoup3
-            mingw-w64-ucrt-x86_64-libgit2-glib
-            mingw-w64-ucrt-x86_64-libarchive
+          pacboy: |
+            efl:p
+            rust:p
+            pkg-config:p
+            cargo-msrv:p
+            pkg-config:p
+            gcc:p
+            vala:p
+            libsoup3:p
+            libgit2-glib:p
+            libarchive:p
 
       - name: Build on Windows
         if: runner.os == 'Windows'
