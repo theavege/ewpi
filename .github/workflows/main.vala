@@ -340,18 +340,14 @@ public class Vendor : Object {
     // point.
     internal string dep_name(string raw) {
         var re = /[<>=]/;
-        try {
-            int idx = -1;
-            MatchInfo mi;
-            if (re.match(raw, 0, out mi)) {
-                int start;
-                mi.fetch_pos(0, out start, null);
-                idx = start;
-            }
-            return idx >= 0 ? raw.substring(0, idx) : raw;
-        } catch (RegexError e) {
-            return raw;
+        int idx = -1;
+        MatchInfo mi;
+        if (re.match(raw, 0, out mi)) {
+            int start;
+            mi.fetch_pos(0, out start, null);
+            idx = start;
         }
+        return idx >= 0 ? raw.substring(0, idx) : raw;
     }
 
     // Downloads and parses this.repo's sync database into `db`. Every
