@@ -210,6 +210,20 @@ public class Vendor : Object {
 
             entry.set_pathname(Path.build_filename(dest_dir, entry.pathname()));
 
+            // A hard-link entry's own pathname is where the link
+            // itself goes — already rewritten above — but its
+            // *target* (the file it should point at) is a separate
+            // field, and libarchive resolves it exactly as written in
+            // the archive: relative to the current working directory,
+            // not to dest_dir. Left alone, every hard link in an
+            // archive that has any (glibc/Tcl/etc. man pages are full
+            // of them — many function names are literally the same
+            // file) fails with "Hard-link target ... does not exist"
+            // and is silently skipped rather than actually created.
+            unowned string? hardlink_target = entry.hardlink();
+            if (hardlink_target != null && hardlink_target != "")
+                entry.set_hardlink(Path.build_filename(dest_dir, hardlink_target));
+
             r = writer.write_header(entry);
             if (r != Archive.Result.OK && r != Archive.Result.WARN) {
                 warning("%s: %s", src_path, writer.error_string());
@@ -659,19 +673,32 @@ bool run_makensis(string nsi_path, out string? error_out) {
 }
 
 int main(string[] args) {
-    if (args.length < 4) {
-        stdout.printf("Usage: %s <repo> <package> <staging-dir> [installer-name]\n\n", args[0]);
-        stdout.printf("  <repo>            mingw64, ucrt64, or clang64\n");
-        stdout.printf("  <package>         e.g. mingw-w64-x86_64-efl (must match <repo>'s prefix)\n");
-        stdout.printf("  <staging-dir>     where to vendor the extracted packages\n");
-        stdout.printf("  [installer-name]  output .exe base name (default: 'installer')\n");
-        return 1;
+    // True compile-time literals — these are exactly what Vala's const
+    // supports. staging_dir's default below can't be one of these: it
+    // needs Environment.get_home_dir() at runtime, which const doesn't
+    // allow (same restriction as C's const — a literal or a constant
+    // expression of literals, not a function call).
+    const string DEFAULT_REPO = "ucrt64";
+    const string DEFAULT_PACKAGE = "mingw-w64-ucrt-x86_64-efl";
+    const string DEFAULT_INSTALLER_NAME = "installer";
+
+    if (args.length > 1 && (args[1] == "--help" || args[1] == "-h")) {
+        stdout.printf("Usage: %s [repo] [package] [staging-dir] [installer-name]\n\n", args[0]);
+        stdout.printf("  [repo]            mingw64, ucrt64, or clang64 (default: %s)\n", DEFAULT_REPO);
+        stdout.printf("  [package]         e.g. mingw-w64-ucrt-x86_64-efl (must match [repo]'s prefix)\n");
+        stdout.printf("                      (default: %s)\n", DEFAULT_PACKAGE);
+        stdout.printf("  [staging-dir]     where to vendor the extracted packages\n");
+        stdout.printf("                      (default: $HOME/efl-staging)\n");
+        stdout.printf("  [installer-name]  output .exe base name (default: %s)\n", DEFAULT_INSTALLER_NAME);
+        return 0;
     }
 
-    string repo = args[1];
-    string package = args[2];
-    string staging_dir = args[3];
-    string installer_name = args.length > 4 ? args[4] : "installer";
+    string default_staging_dir = Path.build_filename(Environment.get_home_dir(), "efl-staging");
+
+    string repo = args.length > 1 ? args[1] : DEFAULT_REPO;
+    string package = args.length > 2 ? args[2] : DEFAULT_PACKAGE;
+    string staging_dir = args.length > 3 ? args[3] : default_staging_dir;
+    string installer_name = args.length > 4 ? args[4] : DEFAULT_INSTALLER_NAME;
 
     if (repo != "mingw64" && repo != "ucrt64" && repo != "clang64") {
         stdout.printf("repo must be one of: mingw64, ucrt64, clang64\n");
