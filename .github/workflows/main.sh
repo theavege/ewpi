@@ -25,7 +25,7 @@ function f_setup
                 msys2) return 0 ;;
                 debian | ubuntu) sudo bash -c '
                     apt-get update
-                    apt-get install -y sh{fmt,ellcheck} nsis valac
+                    apt-get install -y sh{fmt,ellcheck} nsis valac libgit2-glib-1.0-dev
                 ' ;;
                 fedora | alma) sudo dnf install -y shfmt {cpp,shell}check meson auto{conf,make} libtool gettext cmake {y,n}asm gperf python{,3-pip} perl ninja-build pkgconf mingw64-{libgomp,gcc,gcc-c++,nsisb} bison flex make gcc-c++ ;;
             esac 1>/dev/null
