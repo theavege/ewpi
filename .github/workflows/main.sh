@@ -19,7 +19,7 @@ function f_setup
 {
     if [[ -f '/etc/os-release' ]]; then
         source '/etc/os-release'
-        if ! command -v f_check_require >/dev/null; then
+        if ! command -v vala >/dev/null; then
             case ${ID:?} in
                 msys2) return 0 ;;
                 debian | ubuntu) sudo bash -c '
@@ -29,7 +29,6 @@ function f_setup
                 fedora | alma) sudo dnf install -y shfmt {cpp,shell}check meson auto{conf,make} libtool gettext cmake {y,n}asm gperf python{,3-pip} perl ninja-build pkgconf mingw64-{libgomp,gcc,gcc-c++,nsisb} bison flex make gcc-c++ ;;
             esac 1>/dev/null
         fi
-        f_check_require
         shellcheck --external-sources "${0}"
         shfmt -ci -fn -i 4 -d "${0}"
     fi
