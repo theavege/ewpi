@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-function f_check_require() {
+function f_check_require()
+{
     declare -r required_tools=(
         vala
         make{,nsis}
@@ -43,6 +44,6 @@ declare -ar VAR=(
     --Xcc=-O3
     --cc="${CC:-clang}"
     --enable-{checking,mem-profiler,gobject-tracing}
-    --pkg={gio-2.0,xlsxwriter,lib{soup-3.0,archive,git2-glib-1.0}}
+    --pkg={gio-2.0,lib{soup-3.0,archive,git2-glib-1.0}}
 )
 vala  "${VAR[@]}" "${0%/*}/main.vala" --run-args 'ucrt64 mingw-w64-ucrt-x86_64-efl ../efl-staging'
