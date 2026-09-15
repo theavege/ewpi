@@ -15,10 +15,8 @@ jobs:
     strategy:
       matrix:
         os:
-          # - ubuntu-latest
+          - ubuntu-latest
           - windows-latest
-        arch:
-          - x86_64
 
     steps:
       - name: Checkout
