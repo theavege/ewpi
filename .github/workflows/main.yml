@@ -37,6 +37,7 @@ jobs:
             cargo-msrv:p
             pkg-config:p
             gcc:p
+            clang:p
             vala:p
             libsoup3:p
             libgit2-glib:p
