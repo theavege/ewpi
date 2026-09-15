@@ -34,8 +34,7 @@ jobs:
             efl:p
             rust:p
             pkg-config:p
-            cargo-msrv:p
-            pkg-config:p
+            rust:p
             gcc:p
             clang:p
             vala:p
