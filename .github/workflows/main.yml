@@ -30,7 +30,17 @@ jobs:
         with:
           msystem: mingw64
           update: true
-          install: base-devel autoconf automake libtool tar git wget python perl flex bison gettext-devel pkgconf make mingw-w64-x86_64-gettext-tools mingw-w64-x86_64-gperf mingw-w64-x86_64-nasm mingw-w64-x86_64-yasm mingw-w64-x86_64-cmake mingw-w64-x86_64-toolchain mingw-w64-x86_64-ninja mingw-w64-x86_64-meson mingw-w64-x86_64-nsis mingw-w64-x86_64-itstool mingw-w64-x86_64-gettext-tools
+          install: |
+            mingw-w64-ucrt-x86_64-efl
+            mingw-w64-ucrt-x86_64-rust
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-cargo-msrv
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-vala
+            mingw-w64-ucrt-x86_64-libsoup3
+            mingw-w64-ucrt-x86_64-libgit2-glib
+            mingw-w64-ucrt-x86_64-libarchive
 
       - name: Build on Windows
         if: runner.os == 'Windows'
