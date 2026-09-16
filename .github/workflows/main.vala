@@ -354,7 +354,7 @@ public class Vendor : Object {
         error_out = null;
 
         string db_url = "%s/%s.db".printf(mirror_base, repo);
-        string db_path = "/tmp/%s.db.tmp".printf(repo);
+        string db_path = "%s/%s.db.tmp".printf(Environment.get_tmp_dir(), repo);
 
         stdout.printf(":: Fetching repo database %s...\n", db_url);
         stdout.flush();

@@ -1,21 +1,5 @@
 #!/usr/bin/env bash
 
-function f_check_require()
-{
-    declare -r required_tools=(
-        vala
-        make{,nsis}
-        sh{fmt,ellcheck}
-    )
-    for tool in "${required_tools[@]}"; do
-        if ! command -v "$tool" >/dev/null; then
-            printf "Missing dependency: %s\n" "${tool}"
-            return 1
-        fi
-    done
-    return 0
-}
-
 function f_setup
 {
     if [[ -f '/etc/os-release' ]]; then
@@ -38,6 +22,7 @@ function f_setup
 set -xeuo pipefail
 
 f_setup
+
 declare -ar VAR=(
     --verbose
     --fatal-warnings
@@ -47,5 +32,6 @@ declare -ar VAR=(
     --pkg={gio-2.0,lib{soup-3.0,archive}}
 )
 valac "${VAR[@]}" "${0%/*}/main.vala"
+
 ./main --help
 ./main
