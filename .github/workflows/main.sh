@@ -43,7 +43,7 @@ declare -ar VAR=(
     --fatal-warnings
     --Xcc=-O3
     --cc="${CC:-clang}"
-    --enable-{checking,gobject-tracing}
+    --enable-{checking,mem-profiler,gobject-tracing}
     --pkg={gio-2.0,lib{soup-3.0,archive,git2-glib-1.0}}
 )
-vala  "${VAR[@]}" "${0%/*}/main.vala" --run-args 'ucrt64'
+vala  "${VAR[@]}" "${0%/*}/main.vala" --run-args 'ucrt6'
