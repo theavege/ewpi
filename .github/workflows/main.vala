@@ -517,7 +517,17 @@ public class Vendor : Object {
         stdout.printf("\n");
 
         DirUtils.create_with_parents(staging_dir, 0755);
-        string cache_dir = Path.build_filename(staging_dir, ".pkg-cache");
+        // Deliberately a SIBLING of staging_dir, not a child of it (it
+        // used to be staging_dir/.pkg-cache) — generate_nsi()'s
+        // `File /r` bundles everything under staging_dir into the
+        // installer, so a cache directory nested inside it meant every
+        // downloaded .pkg.tar.zst got packed into the installer a
+        // second time, on top of the already-extracted files. Those
+        // archives are already zstd-compressed, so NSIS's LZMA
+        // compressor got no benefit from re-processing them — just a
+        // lot of wasted time on a large closure (and, worse, wasted
+        // *silent* time, which is exactly what looks like a hang).
+        string cache_dir = staging_dir + ".pkg-cache";
         DirUtils.create_with_parents(cache_dir, 0755);
 
         // --- Phase 1: download every not-already-cached package, in
