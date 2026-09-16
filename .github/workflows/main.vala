@@ -72,7 +72,7 @@
 // One package's worth of information out of the repo database.
 
 namespace Utils {
-    public string log(owned string data) {
+    public void log(owned string data) {
         string timestamp = new DateTime.now_local().format("%Y-%m-%d %H:%M:%S");
         stderr.printf("[%s]\t%s\n", timestamp, data);
         stderr.flush();
