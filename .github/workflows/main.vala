@@ -69,10 +69,6 @@
  * mingw-w64-clang-x86_64-) since that's its real name in the database.
  */
 
-using GLib;
-using Soup;
-using Archive;
-
 // One package's worth of information out of the repo database.
 public class DbEntry : Object {
     public string name;

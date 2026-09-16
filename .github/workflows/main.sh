@@ -46,4 +46,5 @@ declare -ar VAR=(
     --enable-{checking,mem-profiler,gobject-tracing}
     --pkg={gio-2.0,lib{soup-3.0,archive}}
 )
-vala  "${VAR[@]}" "${0%/*}/main.vala" --run-args 'ucrt6'
+vala  "${VAR[@]}" "${0%/*}/main.vala" --run-args '--help'
+vala  "${VAR[@]}" "${0%/*}/main.vala"
