@@ -44,6 +44,6 @@ declare -ar VAR=(
     --Xcc=-O3
     --cc="${CC:-clang}"
     --enable-{checking,mem-profiler,gobject-tracing}
-    --pkg={gio-2.0,lib{soup-3.0,archive,git2-glib-1.0}}
+    --pkg={gio-2.0,lib{soup-3.0,archive}}
 )
 vala  "${VAR[@]}" "${0%/*}/main.vala" --run-args 'ucrt6'
