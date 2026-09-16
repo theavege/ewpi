@@ -46,5 +46,6 @@ declare -ar VAR=(
     --enable-{checking,mem-profiler,gobject-tracing}
     --pkg={gio-2.0,lib{soup-3.0,archive}}
 )
-vala  "${VAR[@]}" "${0%/*}/main.vala" --run-args '--help'
-vala  "${VAR[@]}" "${0%/*}/main.vala"
+valac "${VAR[@]}" "${0%/*}/main.vala"
+./main --help
+./main
