@@ -14,7 +14,7 @@ on:
 jobs:
   make:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 6
+    timeout-minutes: 10
     strategy:
       matrix:
         os:
