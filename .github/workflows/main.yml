@@ -29,7 +29,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: ucrt64
+          msystem: clang64
           update: true
           pacboy: |
             nsis:p

@@ -3,17 +3,6 @@
  * mingw-w64 package) by vendoring MSYS2's own prebuilt binaries, entirely
  * from Linux.
  *
- * This is a deliberately separate program from ewpi.vala, not a mode
- * bolted onto it: ewpi builds EFL and its dependencies FROM SOURCE,
- * resolving a hand-maintained packages/*.ewpi dependency graph. This
- * tool instead resolves the REAL dependency graph out of a live pacman
- * repository database and downloads finished binaries — a different
- * input (a repo name + package name, not a directory of descriptors)
- * and a different algorithm (walk an actual %DEPENDS% graph rather than
- * a hand-written deps: line), even though it reuses the same two
- * backend ideas — libsoup3 for fetching, libarchive for extracting —
- * because those are simply the right tools for both jobs.
- *
  * ALGORITHM
  * ---------
  * A pacman repository database (e.g. mingw64.db) is itself just a
@@ -69,13 +58,49 @@
  * mingw-w64-clang-x86_64-) since that's its real name in the database.
  */
 
-// One package's worth of information out of the repo database.
-
 namespace Utils {
     public void log(owned string data) {
         string timestamp = new DateTime.now_local().format("%Y-%m-%d %H:%M:%S");
         stderr.printf("[%s]\t%s\n", timestamp, data);
         stderr.flush();
+    }
+    public string to_absolute_path(string path) {
+        return Path.is_absolute(path) ? path : Path.build_filename(Environment.get_current_dir(), path);
+    }
+    public bool run_makensis(string nsi_path, out string? error_out) {
+        error_out = null;
+        try {
+            var launcher = new SubprocessLauncher(SubprocessFlags.NONE);
+            var proc = launcher.spawnv({ "makensis", nsi_path });
+            proc.wait();
+            if (!proc.get_successful()) {
+                error_out = proc.get_if_signaled()
+                    ? "killed by signal %d".printf(proc.get_term_sig())
+                    : "exited with status %d".printf(proc.get_exit_status());
+                return false;
+            }
+            return true;
+        } catch (Error e) {
+            error_out = e.message;
+            return false;
+        }
+    }
+    public string generate_nsi(string staging_dir, string installer_name, string app_name) {
+        var sb = new StringBuilder();
+        sb.append_printf("OutFile \"%s.exe\"\n", installer_name);
+        sb.append_printf("Name \"%s\"\n", app_name);
+        sb.append("InstallDir \"$PROGRAMFILES64\\%s\"\n".printf(app_name));
+        sb.append("RequestExecutionLevel admin\n\n");
+        sb.append("Section \"Install\"\n");
+        sb.append("  SetOutPath \"$INSTDIR\"\n");
+        // Trailing backslash matters to NSIS's File /r glob semantics.
+        sb.append_printf("  File /r \"%s\\*.*\"\n", staging_dir.replace("/", "\\"));
+        sb.append("  WriteUninstaller \"$INSTDIR\\uninstall.exe\"\n");
+        sb.append("SectionEnd\n\n");
+        sb.append("Section \"Uninstall\"\n");
+        sb.append("  RMDir /r \"$INSTDIR\"\n");
+        sb.append("SectionEnd\n");
+        return sb.str;
     }
 }
 
@@ -632,63 +657,9 @@ public class Vendor : Object {
     }
 }
 
-// -----------------------------------------------------------
-// NSIS packaging
-// -----------------------------------------------------------
-
-// A minimal, generic "install everything under this directory" NSIS
-// script — deliberately simple; if you need per-component sections,
-// a Start Menu shortcut, a license page, etc., this is a starting
-// point to extend, not a finished installer UI.
-string generate_nsi(string staging_dir, string installer_name, string app_name) {
-    var sb = new StringBuilder();
-    sb.append_printf("OutFile \"%s.exe\"\n", installer_name);
-    sb.append_printf("Name \"%s\"\n", app_name);
-    sb.append("InstallDir \"$PROGRAMFILES64\\%s\"\n".printf(app_name));
-    sb.append("RequestExecutionLevel admin\n\n");
-    sb.append("Section \"Install\"\n");
-    sb.append("  SetOutPath \"$INSTDIR\"\n");
-    // Trailing backslash matters to NSIS's File /r glob semantics.
-    sb.append_printf("  File /r \"%s\\*.*\"\n", staging_dir.replace("/", "\\"));
-    sb.append("  WriteUninstaller \"$INSTDIR\\uninstall.exe\"\n");
-    sb.append("SectionEnd\n\n");
-    sb.append("Section \"Uninstall\"\n");
-    sb.append("  RMDir /r \"$INSTDIR\"\n");
-    sb.append("SectionEnd\n");
-    return sb.str;
-}
-
-string to_absolute_path(string path) {
-    return Path.is_absolute(path) ? path : Path.build_filename(Environment.get_current_dir(), path);
-}
-
-bool run_makensis(string nsi_path, out string? error_out) {
-    error_out = null;
-    try {
-        var launcher = new SubprocessLauncher(SubprocessFlags.NONE);
-        var proc = launcher.spawnv({ "makensis", nsi_path });
-        proc.wait();
-        if (!proc.get_successful()) {
-            error_out = proc.get_if_signaled()
-                ? "killed by signal %d".printf(proc.get_term_sig())
-                : "exited with status %d".printf(proc.get_exit_status());
-            return false;
-        }
-        return true;
-    } catch (Error e) {
-        error_out = e.message;
-        return false;
-    }
-}
-
 int main(string[] args) {
-    // True compile-time literals — these are exactly what Vala's const
-    // supports. staging_dir's default below can't be one of these: it
-    // needs Environment.get_home_dir() at runtime, which const doesn't
-    // allow (same restriction as C's const — a literal or a constant
-    // expression of literals, not a function call).
-    const string DEFAULT_REPO = "ucrt64";
-    const string DEFAULT_PACKAGE = "mingw-w64-ucrt-x86_64-efl";
+    const string DEFAULT_REPO = "clang64";
+    const string DEFAULT_PACKAGE = "mingw-w64-clang-x86_64-efl";
     const string DEFAULT_INSTALLER_NAME = "installer";
 
     if (args.length > 1 && (args[1] == "--help" || args[1] == "-h")) {
@@ -703,7 +674,6 @@ int main(string[] args) {
     }
 
     string default_staging_dir = Path.build_filename(Environment.get_home_dir(), "efl-staging");
-
     string repo = args.length > 1 ? args[1] : DEFAULT_REPO;
     string package = args.length > 2 ? args[2] : DEFAULT_PACKAGE;
     string staging_dir = args.length > 3 ? args[3] : default_staging_dir;
@@ -719,19 +689,19 @@ int main(string[] args) {
     if (!vendor.vendor(package, staging_dir, out order))
         return 1;
 
-    stdout.printf(":: Generating NSIS script...\n");
+    Utils.log(":: Generating NSIS script...");
     string nsi_path = Path.build_filename(Environment.get_current_dir(), installer_name + ".nsi");
-    string nsi_content = generate_nsi(to_absolute_path(staging_dir), installer_name, package);
+    string nsi_content = Utils.generate_nsi(Utils.to_absolute_path(staging_dir), installer_name, package);
     try {
         FileUtils.set_contents(nsi_path, nsi_content);
     } catch (Error e) {
-        stdout.printf("could not write %s: %s\n", nsi_path, e.message);
+        Utils.log("could not write %s: %s\n".printf(nsi_path, e.message));
         return 1;
     }
 
-    stdout.printf(":: Running makensis...\n");
+    Utils.log(":: Running makensis...");
     string? merr;
-    if (!run_makensis(nsi_path, out merr)) {
+    if (!Utils.run_makensis(nsi_path, out merr)) {
         stdout.printf("makensis failed: %s\n", merr);
         stdout.printf("(the staged files are still in %s if you want to inspect or repackage them by hand)\n",
                       staging_dir);
