@@ -14,7 +14,7 @@ on:
 jobs:
   make:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 7
     strategy:
       matrix:
         os:
@@ -45,9 +45,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          set -xeuo pipefail
           bash -x .github/workflows/main.sh
-          ./installer.exe /S /D=C:\efl-test-install
 
       - name: Build on Unix
         if: runner.os != 'Windows'

@@ -70,6 +70,15 @@
  */
 
 // One package's worth of information out of the repo database.
+
+namespace Utils {
+    public string log(owned string data) {
+        string timestamp = new DateTime.now_local().format("%Y-%m-%d %H:%M:%S");
+        stderr.printf("[%s]\t%s\n", data);
+        stderr.flush();
+    }
+}
+
 public class DbEntry : Object {
     public string name;
     public string version;
@@ -158,9 +167,8 @@ public class Vendor : Object {
                 return false;
 
             uint delay = uint.min(2u << (attempt - 1), MAX_RETRY_DELAY_SECONDS);
-            stdout.printf("  %s — retrying in %us (attempt %d/%d)...\n",
-                          attempt_err, delay, attempt + 1, MAX_ATTEMPTS);
-            stdout.flush();
+            Utils.log("  %s — retrying in %us (attempt %d/%d)...\n".printf(
+                          attempt_err, delay, attempt + 1, MAX_ATTEMPTS));
             Thread<void*>.usleep(delay * 1000000);
         }
         return false;
@@ -356,8 +364,7 @@ public class Vendor : Object {
         string db_url = "%s/%s.db".printf(mirror_base, repo);
         string db_path = "%s/%s.db.tmp".printf(Environment.get_tmp_dir(), repo);
 
-        stdout.printf(":: Fetching repo database %s...\n", db_url);
-        stdout.flush();
+        Utils.log(":: Fetching repo database %s...\n".printf(db_url));
         if (!download_to_file(db_url, db_path, out error_out))
             return false;
 
@@ -411,7 +418,7 @@ public class Vendor : Object {
             db[entry.name] = entry;
         }
 
-        stdout.printf("   %u packages in %s\n", db.size(), repo);
+        Utils.log("   %u packages in %s\n".printf(db.size(), repo));
         return true;
     }
 
@@ -443,8 +450,8 @@ public class Vendor : Object {
                 // the package itself — but see this tool's notes on
                 // 'cc-libs' specifically: that one is NOT safe to just
                 // shrug off, since it's the compiler runtime DLLs.
-                stdout.printf("   note: '%s' not found in %s (virtual/provides package? skipping)\n",
-                              name, repo);
+                Utils.log("   note: '%s' not found in %s (virtual/provides package? skipping)\n".printf(
+                              name, repo));
                 continue;
             }
 
