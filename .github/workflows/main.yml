@@ -32,6 +32,7 @@ jobs:
           msystem: ucrt64
           update: true
           pacboy: |
+            nsis:p
             efl:p
             pkg-config:p
             clang:p
