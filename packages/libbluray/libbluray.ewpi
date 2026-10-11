@@ -1,0 +1,4 @@
+name: libbluray
+version: 1.4.0
+url: https://download.videolan.org/pub/videolan/libbluray/1.4.0/libbluray-1.4.0.tar.xz
+deps: freetype libxml2 libaacs libbdplus

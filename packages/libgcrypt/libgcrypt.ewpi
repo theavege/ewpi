@@ -1,0 +1,4 @@
+name: libgcrypt
+version: 1.12.2
+url: https://www.gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.12.2.tar.bz2
+deps: libgpg-error

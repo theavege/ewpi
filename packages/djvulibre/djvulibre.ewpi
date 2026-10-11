@@ -1,0 +1,4 @@
+name: djvulibre
+version: 3.5.28
+url: http://downloads.sourceforge.net/djvu/djvulibre-3.5.28.tar.gz
+deps: libjpeg libtiff iconv

@@ -1,0 +1,28 @@
+#! /bin/sh
+
+. ../../common.sh
+
+cp ../cross_toolchain.txt .
+
+if test "x$4" = "xx86_64-w64-mingw32"; then
+    proc="AMD64"
+else
+    proc="X86"
+fi
+
+sed -i -e "s|@prefix@|$3|g;s|@host@|$4|g;s|@proc@|$proc|g;s|@winver@|$winver|g" cross_toolchain.txt
+sed -i -e "s|add_subdirectory(player|#add_subdirectory(player|g;s|add_subdirectory(demo|#add_subdirectory(demo|g" CMakeLists.txt
+
+rm -rf builddir && mkdir builddir && cd builddir || exit
+
+cmake \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DCMAKE_TOOLCHAIN_FILE=../cross_toolchain.txt \
+    -DCMAKE_INSTALL_PREFIX=$prefix_unix \
+    -DCMAKE_VERBOSE_MAKEFILE:BOOL=$verbcmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DENABLE_UBSAN:BOOL=OFF \
+    -G "Unix Makefiles" \
+    .. >../../config.log 2>&1
+
+make -j $jobopt install >../../make.log 2>&1

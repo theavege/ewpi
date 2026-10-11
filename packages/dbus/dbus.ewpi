@@ -1,0 +1,4 @@
+name: dbus
+version: 1.16.2
+url: https://dbus.freedesktop.org/releases/dbus/dbus-1.16.2.tar.xz
+deps: expat

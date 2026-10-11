@@ -1,0 +1,4 @@
+name: fontconfig
+version: 2.18.2
+url: https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.2/fontconfig-2.18.2.tar.xz
+deps: freetype iconv expat gettext

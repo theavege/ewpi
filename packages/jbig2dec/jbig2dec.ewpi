@@ -1,0 +1,4 @@
+name: jbig2dec
+version: 0.20
+url: https://github.com/ArtifexSoftware/jbig2dec/releases/download/0.20/jbig2dec-0.20.tar.gz
+deps: libpng zlib

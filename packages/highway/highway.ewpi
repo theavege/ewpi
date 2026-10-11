@@ -1,0 +1,4 @@
+name: highway
+version: 1.4.0
+url: https://github.com/google/highway/releases/download/1.4.0/highway-1.4.0.tar.gz
+deps:

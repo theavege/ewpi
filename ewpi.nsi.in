@@ -1,0 +1,293 @@
+; EWPI installer
+; Written by Vincent Torri
+
+!include MUI2.nsh
+
+Name "EFL dependencies installer"
+BrandingText "EFL dependencies installer v@version@"
+OutFile "ewpi-@arch@-@winver@-@version@.exe"
+Unicode True
+SetCompressor /SOLID lzma
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Function ReplaceLineStr
+ Exch $R0 ; string to replace that whole line with
+ Exch
+ Exch $R1 ; string that line should start with
+ Exch
+ Exch 2
+ Exch $R2 ; file
+ Push $R3 ; file handle
+ Push $R4 ; temp file
+ Push $R5 ; temp file handle
+ Push $R6 ; global
+ Push $R7 ; input string length
+ Push $R8 ; line string length
+ Push $R9 ; global
+
+  StrLen $R7 $R1
+
+  GetTempFileName $R4
+
+  FileOpen $R5 $R4 w
+  FileOpen $R3 $R2 r
+
+  ReadLoop:
+  ClearErrors
+   FileRead $R3 $R6
+    IfErrors Done
+
+   StrLen $R8 $R6
+   StrCpy $R9 $R6 $R7 -$R8
+   StrCmp $R9 $R1 0 +3
+
+    FileWrite $R5 "$R0$\r$\n"
+    Goto ReadLoop
+
+    FileWrite $R5 $R6
+    Goto ReadLoop
+
+  Done:
+
+  FileClose $R3
+  FileClose $R5
+
+  SetDetailsPrint none
+   Delete $R2
+   Rename $R4 $R2
+  SetDetailsPrint both
+
+ Pop $R9
+ Pop $R8
+ Pop $R7
+ Pop $R6
+ Pop $R5
+ Pop $R4
+ Pop $R3
+ Pop $R2
+ Pop $R1
+ Pop $R0
+FunctionEnd
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Default installation folder
+InstallDir "$LOCALAPPDATA\ewpi_@arch_suf@"
+
+;Request application privileges for Windows >= Vista
+RequestExecutionLevel user
+
+; Show a message box with a warning when the user wants to close the installer.
+!define MUI_ABORTWARNING
+
+; Display E logo
+!define MUI_ICON "e.ico"
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "e.bmp"
+
+; Pages
+
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "License.txt"
+!insertmacro MUI_PAGE_COMPONENTS
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+!insertmacro MUI_UNPAGE_WELCOME
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_UNPAGE_FINISH
+
+!insertmacro MUI_LANGUAGE "English"
+
+; Installer sections
+
+!define EwpiDir  "@prefix@"
+
+;; needed DLL, from Fedora mingw toolchain
+!define GccDir "C:\Users\VTorri\Documents\msys2\ucrt64\bin"
+
+Section "!DLL (required)" SecEwpiInstDLL
+
+  SectionIn RO
+
+  SetOutPath "$INSTDIR\bin"
+
+  File "${EwpiDir}\bin\*.dll"
+  File "${EwpiDir}\bin\fc-cache.exe"
+  File "${EwpiDir}\bin\fc-cat.exe"
+  File "${EwpiDir}\bin\fc-conflist.exe"
+  File "${EwpiDir}\bin\fc-list.exe"
+  File "${EwpiDir}\bin\fc-match.exe"
+  File "${EwpiDir}\bin\fc-pattern.exe"
+  File "${EwpiDir}\bin\fc-query.exe"
+  File "${EwpiDir}\bin\fc-scan.exe"
+  File "${EwpiDir}\bin\fc-validate.exe"
+
+  ;; needed DLL, from Fedora mingw toolchain
+  File "${GccDir}\libgcc_s_seh-1.dll"
+  File "${GccDir}\libgomp-1.dll"
+;;  File "${GccDir}\libssp-0.dll"
+  File "${GccDir}\libstdc++-6.dll"
+  File "${GccDir}\libwinpthread-1.dll"
+
+  SetOutPath "$INSTDIR\lib\gstreamer-1.0"
+
+  File "${EwpiDir}\lib\gstreamer-1.0\*.dll"
+
+  SetOutPath "$INSTDIR\lib\mpg123"
+
+  File "${EwpiDir}\lib\mpg123\*.dll"
+
+  SetOutPath "$INSTDIR\lib"
+
+;;  File "${EwpiDir}\lib\libmupdf.a"
+;;  File "${EwpiDir}\lib\libmupdf-third.a"
+
+  SetOutPath "$INSTDIR\share\fontconfig"
+
+  File /r "${EwpiDir}\share\fontconfig\conf.avail"
+
+  SetOutPath "$INSTDIR\share\fonts"
+
+  File /r "${EwpiDir}\share\fonts\*.ttf"
+
+  SetOutPath "$INSTDIR\etc\fonts"
+
+  File "${EwpiDir}\etc\fonts\fonts.conf"
+
+  SetOutPath "$INSTDIR\share"
+
+  File /r "${EwpiDir}\share\mime"
+
+  SetOutPath "$INSTDIR"
+
+  File "README.md"
+  File "NEWS"
+
+  WriteRegStr HKCU "Software\ewpi_@arch_suf@" "" $INSTDIR
+
+  ; PATH
+  EnVar::SetHKCU
+  EnVar::AddValue "PATH" "$INSTDIR\bin"
+
+  ; XDG_DATA_DIRS
+  EnVar::AddValue "XDG_DATA_DIRS" "$INSTDIR\share"
+
+  ; Create uninstaller
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+
+SectionEnd
+
+Section /o "Development files" SecEwpiInstDev
+
+  SetOutPath "$INSTDIR\lib"
+
+  File "${EwpiDir}\lib\*.dll.a"
+
+  SetOutPath "$INSTDIR\lib\pkgconfig"
+
+  File "${EwpiDir}\lib\pkgconfig\*.pc"
+
+  SetOutPath "$INSTDIR\include"
+
+  File /r "${EwpiDir}\include\*.h"
+  File /r "${EwpiDir}\include\*.hh"
+  File /r "${EwpiDir}\include\*.hpp"
+
+  SetOutPath "$INSTDIR\lib\glib-2.0\include"
+
+  File "${EwpiDir}\lib\glib-2.0\include\glibconfig.h"
+
+  SetOutPath "$INSTDIR\lib\dbus-1.0\include\dbus"
+
+  File "${EwpiDir}\lib\dbus-1.0\include\dbus\dbus-arch-deps.h"
+
+  WriteRegStr HKCU "Software\ewpi_@arch_suf@" "" $INSTDIR
+
+  EnVar::SetHKCU
+
+  ; PKG_CONFIG_PATH
+  EnVar::AddValue "PKG_CONFIG_PATH" "$INSTDIR\lib\pkgconfig"
+  ; FONTCONFIG_FILE
+  EnVar::AddValue "FONTCONFIG_FILE" "$INSTDIR\etc\fonts\fonts.conf"
+  ; FONTCONFIG_PATH
+  EnVar::AddValue "FONTCONFIG_PATH" "$INSTDIR\etc\fonts"
+
+  ; Create uninstaller
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+
+SectionEnd
+
+; Description
+
+  LangString DESC_SecEwpiInstDLL ${LANG_ENGLISH} "DLL required by the EFL at runtime"
+  LangString DESC_SecEwpiInstDev ${LANG_ENGLISH} "Development files for EFL development"
+
+  ;Assign language strings to sections
+  !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecEwpiInstDLL} $(DESC_SecEwpiInstDLL)
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecEwpiInstDev} $(DESC_SecEwpiInstDev)
+  !insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+; Uninstaller Section
+
+Section "Uninstall"
+
+  Delete "$INSTDIR\Uninstall.exe"
+  Delete "$INSTDIR\README.md"
+  Delete "$INSTDIR\NEWS"
+
+  RMDIR /r "$INSTDIR\bin"
+  RMDIR /r "$INSTDIR\etc"
+  RMDIR /r "$INSTDIR\include"
+  RMDIR /r "$INSTDIR\lib"
+  RMDIR /r "$INSTDIR\share"
+
+  RMDir "$INSTDIR"
+
+  EnVar::SetHKCU
+
+  ; FONTCONFIG_PATH
+  EnVar::DeleteValue "FONTCONFIG_PATH" "$INSTDIR\etc\fonts"
+  ; FONTCONFIG_FILE
+  EnVar::DeleteValue "FONTCONFIG_FILE" "$INSTDIR\etc\fonts\fonts.conf"
+  ; PKG_CONFIG_PATH
+  EnVar::DeleteValue "PKG_CONFIG_PATH" "$INSTDIR\lib\pkgconfig"
+  ; TODO delete PKG_CONFIG_PATH env var if empty
+  ; XDG_DATA_DIRS
+  EnVar::DeleteValue "XDG_DATA_DIRS" "$INSTDIR\share"
+  ; PATH
+  EnVar::DeleteValue "PATH" "$INSTDIR\bin"
+
+  DeleteRegKey /ifempty HKCU "Software\ewpi_@arch_suf@"
+
+SectionEnd
+
+Function .onInstSuccess
+
+  Push "$INSTDIR\etc\fonts\fonts.conf"
+  Push "<dirp>"
+  Push "	<dir>$INSTDIR\share\fonts</dir>"
+  Call ReplaceLineStr
+
+  Exec "$InstDir\bin\fc-cache.exe -s -f -v"
+
+  Var /GLOBAL my_handle
+  Var /GLOBAL my_file
+
+  FindFirst $my_handle $my_file $INSTDIR\lib\pkgconfig\*.pc
+  loop:
+    Strcmp $my_file "" done
+    Push "$INSTDIR\lib\pkgconfig\$my_file"
+    Push "prefix"
+    Push "prefix=$INSTDIR\lib\pkgconfig"
+    Call ReplaceLineStr
+    FindNext $my_handle $my_file
+    Goto loop
+  done:
+  FindClose $my_handle
+
+FunctionEnd

@@ -1,0 +1,4 @@
+name: expat
+version: 2.8.5
+url: https://github.com/libexpat/libexpat/releases/download/R_2_8_5/expat-2.8.5.tar.xz
+deps:
