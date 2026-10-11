@@ -1018,36 +1018,47 @@ _ew_packages_status_set()
     closedir(dir);
 }
 
+static int
+_ew_packages_find(const char *pkg_name)
+{
+    for (int idx = 0; idx < _ew_package_count_total; idx++)
+    {
+        if (_ewpi_pkgs[idx].name && strcmp(pkg_name, _ewpi_pkgs[idx].name) == 0)
+            return idx;
+    }
+
+    return -1;
+}
+
 static void
 _ew_packages_tree(const char *pkg_name)
 {
-    Package pkg;
     int idx;
     int already_in = 0;
 
     /* get the index of the package */
-    for (idx = 0; idx < _ew_package_count_total; idx++)
+    idx = _ew_packages_find(pkg_name);
+    if (idx < 0)
     {
-        if (strcmp(pkg_name, _ewpi_pkgs[idx].name) == 0)
-            break;
+        printf("error: unknown dependency '%s', exiting...\n", pkg_name);
+        fflush(stdout);
+        exit(1);
     }
-    pkg = _ewpi_pkgs[idx];
 
-    for (int i = 0; i < pkg.deps_count; i++)
-        _ew_packages_tree(pkg.deps[i]);
-
+    /* guard against dependency loops */
     for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         if (_ew_package_index[i] == idx)
             already_in = 1;
     }
+    if (already_in)
+        return;
 
-    if (!already_in)
-    {
-        _ew_package_index[_ew_package_deps_dst_count] = idx;
-        _ew_package_deps_dst_count++;
+    _ew_package_index[_ew_package_deps_dst_count] = idx;
+    _ew_package_deps_dst_count++;
 
-    }
+    for (int i = 0; i < _ewpi_pkgs[idx].deps_count; i++)
+        _ew_packages_tree(_ewpi_pkgs[idx].deps[i]);
 }
 
 static void
@@ -1056,7 +1067,7 @@ _ew_packages_not_installed_disp(void)
 
     printf("\nPackages (%d)\n", _ew_package_count_not_installed);
     fflush(stdout);
-    for (int i = 0; i < _ew_package_count_total; i++)
+    for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         int idx = _ew_package_index[i];
         if (!_ewpi_pkgs[idx].installed)
@@ -1320,7 +1331,7 @@ _ew_packages_download(void)
     int count;
 
     count = 0;
-    for (int i = 0; i < _ew_package_count_total; i++)
+    for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         char dir[4096];
 
@@ -1342,7 +1353,7 @@ _ew_packages_download(void)
 
     printf(":: Download sources...\n");
     fflush(stdout);
-    for (int i = 0; i < _ew_package_count_total; i++)
+    for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         int ret;
         char dir[4096];
@@ -1424,7 +1435,7 @@ _ew_packages_longest_name()
     Package *iter;
 
     /* compute the largest name (including version) of the packages */
-    for (int i = 0; i < _ew_package_count_total; i++)
+    for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         iter = _ewpi_pkgs + _ew_package_index[i];
         {
@@ -1516,7 +1527,7 @@ _ew_packages_extract(int verbose)
     int c;
 
     count = 0;
-    for (int i = 0; i < _ew_package_count_total; i++)
+    for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         iter = _ewpi_pkgs + _ew_package_index[i];
         if (!ew_path_join(buf, sizeof(buf), _ew_package_dir_dst, iter->name,
@@ -1535,7 +1546,7 @@ _ew_packages_extract(int verbose)
     fflush(stdout);
 
     c = 0;
-    for (int i = 0; i < _ew_package_count_total; i++)
+    for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         const char *name;
         const char *tarname;
@@ -1620,7 +1631,7 @@ _ew_packages_install(const char *prefix, const char *host, const char *arch, con
     fflush(stdout);
 
     c = 0;
-    for (int i = 0; i < _ew_package_count_total; i++)
+    for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         const char *name;
         const char *tarname;
