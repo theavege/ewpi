@@ -141,10 +141,10 @@ int ewpi_spawn(const char *host, const char *prog, const char *option)
         int fd;
 
         fd = open("/dev/null", O_WRONLY);
-        if (fd <  0) exit(1);
-        if (dup2(fd, 1) < 0) exit(1);
-        if (dup2(fd, 2) < 0) exit(1);
-        if (close(fd) < 0) exit(1);;
+        if (fd <  0) _exit(1);
+        if (dup2(fd, 1) < 0) _exit(1);
+        if (dup2(fd, 2) < 0) _exit(1);
+        if (close(fd) < 0) _exit(1);
 
         *cmd = '\0';
         if (host)
@@ -154,10 +154,11 @@ int ewpi_spawn(const char *host, const char *prog, const char *option)
         }
         strcat(cmd, prog);
         args[0] = cmd;
-        args[1] = (char *)option;
+        /* option may be an empty string: then exec with no extra argument. */
+        args[1] = (*option != '\0') ? (char *)option : NULL;
         args[2] = NULL;
         execvp(args[0], args);
-        exit(errno);
+        _exit(errno);
     }
     else
     {
@@ -166,10 +167,10 @@ int ewpi_spawn(const char *host, const char *prog, const char *option)
         int ret;
 
         ret = waitpid(pid, &status, 0);
-        if (ret != 0)
+        if (ret < 0)
             return 0;
 
-        return WIFEXITED(status) ? WEXITSTATUS(status) == 0 : 0;
+        return WIFEXITED(status) ? (WEXITSTATUS(status) == 0) : 0;
     }
 }
 
