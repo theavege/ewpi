@@ -177,6 +177,73 @@ typedef struct
     unsigned int is_git : 1;
 } Package;
 
+/* Bounded string helpers: ew_strlcpy / ew_strlcat return the total length
+ * they tried to create; if that is >= the buffer size, truncation occurred
+ * and the caller must handle it instead of overflowing the buffer. */
+static size_t
+ew_strlcpy(char *dst, const char *src, size_t size)
+{
+    size_t src_len = strlen(src);
+    size_t copy_len = (src_len >= size) ? (size - 1) : src_len;
+
+    if (size == 0)
+        return src_len + 1; /* force caller to detect truncation */
+
+    if (copy_len)
+        memcpy(dst, src, copy_len);
+    dst[copy_len] = '\0';
+
+    return src_len;
+}
+
+static size_t
+ew_strlcat(char *dst, const char *src, size_t size)
+{
+    size_t dst_len = strnlen(dst, size);
+    size_t src_len = strlen(src);
+
+    if (dst_len >= size) /* unterminated dst */
+        return size + src_len;
+
+    if (src_len >= size - dst_len)
+    {
+        /* would truncate: copy what fits, keep NUL, signal via return */
+        memcpy(dst + dst_len, src, size - dst_len - 1);
+        dst[size - 1] = '\0';
+        return dst_len + src_len;
+    }
+
+    memcpy(dst + dst_len, src, src_len + 1);
+
+    return dst_len + src_len;
+}
+
+#define EW_PATH_SIZE 4096
+
+/* Join up to 3 components into buf with '/' separators. Returns buf on
+ * success, NULL on truncation. */
+static char *
+ew_path_join(char *buf, size_t size, const char *a, const char *b, const char *c)
+{
+    size_t n;
+
+    if (ew_strlcpy(buf, a, size) >= size)
+        return NULL;
+    n = ew_strlcat(buf, "/", size);
+    n = ew_strlcat(buf, b, size);
+    if (n >= size)
+        return NULL;
+    if (c)
+    {
+        n = ew_strlcat(buf, "/", size);
+        n = ew_strlcat(buf, c, size);
+        if (n >= size)
+            return NULL;
+    }
+
+    return buf;
+}
+
 static const int _ew_vmaj = 1;
 static const int _ew_vmin = 3;
 
@@ -404,17 +471,21 @@ _ew_requirements(const char *host)
         old_file[len] = 0; /* not necessary, but i'm paranoid */
         last = strrchr(old_file, '\\');
         *(last + 1) = 0;
-        strcpy(new_file, old_file);
+        ew_strlcpy(new_file, old_file, sizeof(new_file));
 
         if (i >= 2)
         {
-            strcat(old_file, _ew_req_host[i]);
-            strcat(old_file, ".exe");
+            size_t n;
 
-            strcat(new_file, host);
-            strcat(new_file, "-");
-            strcat(new_file, _ew_req_host[i]);
-            strcat(new_file, ".exe");
+            n = ew_strlcat(old_file, _ew_req_host[i], sizeof(old_file));
+            n += ew_strlcat(old_file, ".exe", sizeof(old_file));
+
+            n = ew_strlcat(new_file, host, sizeof(new_file));
+            n = ew_strlcat(new_file, "-", sizeof(new_file));
+            n = ew_strlcat(new_file, _ew_req_host[i], sizeof(new_file));
+            n = ew_strlcat(new_file, ".exe", sizeof(new_file));
+            if (n >= sizeof(old_file) || n >= sizeof(new_file))
+                return 0;
 
             res = CopyFile(old_file, new_file, FALSE);
             if (!res) return 0;
@@ -505,7 +576,8 @@ _ew_version_get(char *ver, int *maj, int *min, int *mic, int *rev)
     *mic = 0;
     *rev = 0;
 
-    strcpy(buf, ver);
+    if (ew_strlcpy(buf, ver, sizeof(buf)) >= sizeof(buf))
+        return;
     start = buf;
 
     iter = strchr(start, '-');
@@ -703,16 +775,15 @@ _ew_packages_get_git(void)
 static int
 _ew_copy(const char *path_git, const char *path_dst, const char *filename)
 {
-    char f_git[4096];
-    char f_dst[4096];
+    char f_git[EW_PATH_SIZE];
+    char f_dst[EW_PATH_SIZE];
     char *buf_git = NULL;
     FILE *file;
     size_t size;
     size_t sz;
 
-    strcpy(f_git, path_git);
-    strcat(f_git, "/");
-    strcat(f_git, filename);
+    if (!ew_path_join(f_git, sizeof(f_git), path_git, filename, NULL))
+        return 0;
 
     /* get f_git size */
     size = _ew_file_exists(f_git);
@@ -733,9 +804,11 @@ _ew_copy(const char *path_git, const char *path_dst, const char *filename)
 
     fclose(file);
 
-    strcpy(f_dst, path_dst);
-    strcat(f_dst, "/");
-    strcat(f_dst, filename);
+    if (!ew_path_join(f_dst, sizeof(f_dst), path_dst, filename, NULL))
+    {
+        free(buf_git);
+        return 0;
+    }
 
     file = fopen(f_dst, "wb");
     if (!file)
@@ -774,16 +847,15 @@ _ew_packages_dst_set(const char *prefix)
     {
         char buf_ewpi[PATH_MAX];
 
-        strcpy(buf_git, _ew_package_dir_git);
-        strcat(buf_git, "/");
-        strcat(buf_git, _ewpi_pkgs[i].name);
+        if (!ew_path_join(buf_git, sizeof(buf_git), _ew_package_dir_git,
+                          _ewpi_pkgs[i].name, NULL) ||
+            !ew_path_join(buf_dst, sizeof(buf_dst), _ew_package_dir_dst,
+                          _ewpi_pkgs[i].name, NULL))
+            continue;
 
-        strcpy(buf_dst, _ew_package_dir_dst);
-        strcat(buf_dst, "/");
-        strcat(buf_dst, _ewpi_pkgs[i].name);
-
-        strcpy(buf_ewpi, _ewpi_pkgs[i].name);
-        strcat(buf_ewpi, ".ewpi");
+        if (ew_strlcpy(buf_ewpi, _ewpi_pkgs[i].name, sizeof(buf_ewpi)) >= sizeof(buf_ewpi) ||
+            ew_strlcat(buf_ewpi, ".ewpi", sizeof(buf_ewpi)) >= sizeof(buf_ewpi))
+            continue;
 
         if (_ew_path_exists(buf_dst))
         {
@@ -795,9 +867,9 @@ _ew_packages_dst_set(const char *prefix)
             Package pkg;
             Map map;
 
-            strcpy(buf_ewpi_dst, buf_dst);
-            strcat(buf_ewpi_dst, "/");
-            strcat(buf_ewpi_dst, buf_ewpi);
+            if (!ew_path_join(buf_ewpi_dst, sizeof(buf_ewpi_dst), buf_dst,
+                              buf_ewpi, NULL))
+                continue;
             if (ewpi_map_new(&map, buf_ewpi_dst))
             {
                 _ew_packages_fill(&map, &pkg);
@@ -815,18 +887,12 @@ _ew_packages_dst_set(const char *prefix)
                 {
                     char buf[PATH_MAX];
 
-                    strcpy(buf, buf_dst);
-                    strcat(buf, "/");
-                    strcat(buf, "downloaded");
-                    unlink(buf);
-                    strcpy(buf, buf_dst);
-                    strcat(buf, "/");
-                    strcat(buf, "extracted");
-                    unlink(buf);
-                    strcpy(buf, buf_dst);
-                    strcat(buf, "/");
-                    strcat(buf, "installed");
-                    unlink(buf);
+                    if (ew_path_join(buf, sizeof(buf), buf_dst, "downloaded", NULL))
+                        unlink(buf);
+                    if (ew_path_join(buf, sizeof(buf), buf_dst, "extracted", NULL))
+                        unlink(buf);
+                    if (ew_path_join(buf, sizeof(buf), buf_dst, "installed", NULL))
+                        unlink(buf);
                 }
                 ewpi_map_del(&map);
             }
@@ -851,11 +917,9 @@ _ew_packages_dst_set(const char *prefix)
     if (!getcwd(buf_git, PATH_MAX))
         return;
 
-    if ((strlen(prefix) + sizeof("/share/ewpi") - 1) > (PATH_MAX))
+    if (ew_strlcpy(buf_dst, prefix, sizeof(buf_dst)) >= sizeof(buf_dst) ||
+        ew_strlcat(buf_dst, "/share/ewpi", sizeof(buf_dst)) >= sizeof(buf_dst))
         return;
-
-    strcpy(buf_dst, prefix);
-    strcat(buf_dst, "/share/ewpi");
     _ew_copy(buf_git, buf_dst, "common.sh");
 }
 
@@ -895,34 +959,46 @@ _ew_packages_status_set()
             exit(1);
         }
 
-        strcpy(buf_pkg, _ew_package_dir_dst);
-        strcat(buf_pkg, "/");
-        strcat(buf_pkg, f->d_name);
-        strcat(buf_pkg, "/");
+        if (!ew_path_join(buf_pkg, sizeof(buf_pkg), _ew_package_dir_dst,
+                          f->d_name, NULL))
+            continue;
 
-        strcpy(buf, buf_pkg);
-        strcat(buf, "downloaded");
-
-        if (_ew_file_exists(buf) && !iter->sha512sum)
-            iter->downloaded = 1;
+        if (ew_strlcpy(buf, buf_pkg, sizeof(buf)) < sizeof(buf) &&
+            ew_strlcat(buf, "/downloaded", sizeof(buf)) < sizeof(buf))
+        {
+            if (_ew_file_exists(buf) && !iter->sha512sum)
+                iter->downloaded = 1;
+            else
+                _ew_package_count_not_downloaded++;
+        }
         else
+        {
             _ew_package_count_not_downloaded++;
+        }
 
-        strcpy(buf, buf_pkg);
-        strcat(buf, "extracted");
-
-        if (_ew_file_exists(buf))
-            iter->extracted = 1;
+        if (ew_path_join(buf, sizeof(buf), buf_pkg, "extracted", NULL))
+        {
+            if (_ew_file_exists(buf))
+                iter->extracted = 1;
+            else
+                _ew_package_count_not_extracted++;
+        }
         else
+        {
             _ew_package_count_not_extracted++;
+        }
 
-        strcpy(buf, buf_pkg);
-        strcat(buf, "installed");
-
-        if (_ew_file_exists(buf))
-            iter->installed = 1;
+        if (ew_path_join(buf, sizeof(buf), buf_pkg, "installed", NULL))
+        {
+            if (_ew_file_exists(buf))
+                iter->installed = 1;
+            else
+                _ew_package_count_not_installed++;
+        }
         else
+        {
             _ew_package_count_not_installed++;
+        }
 
         iter++;
     }
@@ -1276,10 +1352,9 @@ _ew_packages_extract(int verbose)
     for (int i = 0; i < _ew_package_count_total; i++)
     {
         iter = _ewpi_pkgs + _ew_package_index[i];
-        strcpy(buf, _ew_package_dir_dst);
-        strcat(buf, "/");
-        strcat(buf, iter->name);
-        strcat(buf, "/extracted");
+        if (!ew_path_join(buf, sizeof(buf), _ew_package_dir_dst, iter->name,
+                          "extracted"))
+            continue;
         if (!_ew_file_exists(buf))
             count++;
         else
@@ -1506,9 +1581,8 @@ _ew_packages_clean_directories(char *pkg_dir)
                 (strcmp(f->d_name, "..") == 0))
                 continue;
 
-            strcpy(buf2, pkg_dir);
-            strcat(buf2, "/");
-            strcat(buf2, f->d_name);
+            if (!ew_path_join(buf2, sizeof(buf2), pkg_dir, f->d_name, NULL))
+                continue;
             if (_ew_path_exists(buf2))
                 _ew_recursive_rm(buf2);
         }
@@ -1538,13 +1612,12 @@ _ew_packages_clean(void)
 
         _ew_packages_status_disp(i, _ew_package_count_total, name, version);
 
-        strcpy(buf, _ew_package_dir_dst);
-        strcat(buf, "/");
-        strcat(buf, name);
+        if (!ew_path_join(buf, sizeof(buf), _ew_package_dir_dst, name, NULL))
+            continue;
         _ew_packages_clean_directories(buf);
-        strcat(buf, "/");
-        strcat(buf, tarname);
-        unlink(buf);
+        if (ew_strlcat(buf, "/", sizeof(buf)) < sizeof(buf) &&
+            ew_strlcat(buf, tarname, sizeof(buf)) < sizeof(buf))
+            unlink(buf);
     }
 
     _ew_packages_status_disp(_ew_package_count_total - 1, _ew_package_count_total, NULL, NULL);
@@ -1805,12 +1878,15 @@ int main(int argc, char *argv[])
     if (!prefix)
     {
         char buf[PATH_MAX];
+        const char *home = getenv("HOME");
 
-        strcpy(buf, getenv("HOME"));
-        if (strcmp(host, "i686-w64-mingw32") == 0)
-            strcat(buf, "/ewpi_32");
-        else
-            strcat(buf, "/ewpi_64");
+        if (!home || !ew_path_join(buf, sizeof(buf), home,
+                                   (strcmp(host, "i686-w64-mingw32") == 0) ?
+                                   "ewpi_32" : "ewpi_64", NULL))
+        {
+            fprintf(stderr, "error: cannot determine default prefix (is HOME set?)\n");
+            exit(1);
+        }
         prefix = strdup(buf);
     }
 
