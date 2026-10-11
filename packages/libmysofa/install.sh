@@ -7,7 +7,7 @@ git checkout da9e4adc619ee3d1ae5e68da3ed14aa5e60b3ec1
 
 cp ../cross_toolchain.txt .
 
-if test "x$4" = "xx86_64-w64-mingw32" ; then
+if test "x$4" = "xx86_64-w64-mingw32"; then
     proc="AMD64"
     machine=-m64
 else
@@ -30,7 +30,7 @@ cmake \
     -DBUILD_STATIC_LIBS=OFF \
     -DBUILD_TESTS=OFF \
     -G "Ninja" \
-    .. > ../../config.log 2>&1
+    .. >../../config.log 2>&1
 
 cd ..
-ninja $verbninja -C builddir install > ../make.log 2>&1
+ninja $verbninja -C builddir install >../make.log 2>&1

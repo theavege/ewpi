@@ -4,7 +4,7 @@
 
 cp ../cross_toolchain.txt .
 
-if test "x$4" = "xx86_64-w64-mingw32" ; then
+if test "x$4" = "xx86_64-w64-mingw32"; then
     proc="AMD64"
     machine=-m64
 else
@@ -21,7 +21,6 @@ sed -i -e "s|LIBRARY|LIBRARY vorbisfile|g" win32/vorbisfile.def
 
 rm -rf builddir && mkdir builddir && cd builddir
 
-
 cmake \
     -DCMAKE_TOOLCHAIN_FILE=../cross_toolchain.txt \
     -DCMAKE_INSTALL_PREFIX=$prefix_unix \
@@ -29,6 +28,6 @@ cmake \
     -DBUILD_SHARED_LIBS=ON \
     -DINSTALL_PKG_CONFIG_MODULE=ON \
     -G "Ninja" \
-    .. > ../../config.log 2>&1
+    .. >../../config.log 2>&1
 
-ninja $verbninja -j $jobopt install > ../../make.log 2>&1
+ninja $verbninja -j $jobopt install >../../make.log 2>&1

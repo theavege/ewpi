@@ -7,7 +7,7 @@ git checkout 33c921efad52392d6c7047a6768a1337cd106998
 
 cp ../cross_toolchain.txt .
 
-if test "x$4" = "xx86_64-w64-mingw32" ; then
+if test "x$4" = "xx86_64-w64-mingw32"; then
     proc="AMD64"
     machine=-m64
 else
@@ -34,6 +34,6 @@ cmake \
     -DENABLE_TESTS=FALSE \
     -DENABLE_TOOLS=FALSE \
     -G "Unix Makefiles" \
-    .. > ../../config.log 2>&1
+    .. >../../config.log 2>&1
 
-make -j $jobopt install > ../../make.log 2>&1
+make -j $jobopt install >../../make.log 2>&1

@@ -4,7 +4,7 @@
 
 cp ../cross_toolchain.txt .
 
-if test "x$4" = "xx86_64-w64-mingw32" ; then
+if test "x$4" = "xx86_64-w64-mingw32"; then
     proc="AMD64"
     machine=-m64
 else
@@ -23,13 +23,13 @@ cmake \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=ON \
     -G "Unix Makefiles" \
-    .. > ../../config.log 2>&1
+    .. >../../config.log 2>&1
 
-make -j $jobopt install > ../../make.log 2>&1
+make -j $jobopt install >../../make.log 2>&1
 
 # See include/libyuv/version.h for the version
 
-cat > libyuv.pc <<EOF
+cat >libyuv.pc <<EOF
 prefix=$3
 exec_prefix=\${prefix}
 bindir=\${exec_prefix}/bin

@@ -4,7 +4,7 @@
 
 cp ../cross_toolchain.txt .
 
-if test "x$4" = "xx86_64-w64-mingw32" ; then
+if test "x$4" = "xx86_64-w64-mingw32"; then
     proc="AMD64"
     machine=-m64
 else
@@ -24,13 +24,13 @@ cmake \
     -DWIN_ICONV_BUILD_STATIC=OFF \
     -DWIN_ICONV_BUILD_EXECUTABLE=OFF \
     -G "Ninja" \
-    .. > ../../config.log 2>&1
+    .. >../../config.log 2>&1
 
-ninja $verbninja install > ../../make.log 2>&1
+ninja $verbninja install >../../make.log 2>&1
 
 cd ..
 
-cat > iconv.pc <<EOF
+cat >iconv.pc <<EOF
 prefix=$3
 exec_prefix=\${prefix}
 bindir=\${exec_prefix}/bin

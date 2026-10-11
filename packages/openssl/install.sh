@@ -2,7 +2,7 @@
 
 . ../../common.sh
 
-if test "x$4" = "xx86_64-w64-mingw32" ; then
+if test "x$4" = "xx86_64-w64-mingw32"; then
     toolchain="mingw64"
     toolchain_prefix="x86_64-w64-mingw32-"
 else
@@ -23,10 +23,10 @@ fi
     enable-camellia \
     enable-idea \
     enable-mdc2 \
-    enable-rc5  \
+    enable-rc5 \
     enable-rfc3779 \
     no-apps \
     no-docs \
-    > ../config.log 2>&1
+    >../config.log 2>&1
 
-make $verbmake install > ../make.log 2>&1
+make $verbmake install >../make.log 2>&1

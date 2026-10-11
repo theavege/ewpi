@@ -4,7 +4,7 @@
 
 cp ../cross_toolchain.txt .
 
-if test "x$4" = "xx86_64-w64-mingw32" ; then
+if test "x$4" = "xx86_64-w64-mingw32"; then
     proc="AMD64"
     machine=-m64
 else
@@ -25,6 +25,6 @@ cmake \
     -DINSTALL_PKG_CONFIG_MODULE=ON \
     -DINSTALL_CMAKE_PACKAGE_MODULE=OFF \
     -G "Ninja" \
-    .. > ../../config.log 2>&1
+    .. >../../config.log 2>&1
 
-ninja $verbninja -j $jobopt install > ../../make.log 2>&1
+ninja $verbninja -j $jobopt install >../../make.log 2>&1

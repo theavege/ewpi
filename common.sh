@@ -1,4 +1,3 @@
-
 # $1 : arch
 # $2 : tarname
 # $3 : prefix
@@ -14,17 +13,17 @@ set -e
 
 unset PKG_CONFIG_PATH
 
-EWPI_OS=`uname`
+EWPI_OS=$(uname)
 case ${EWPI_OS} in
-    MSYS*|MINGW*)
-	prefix_unix=`cygpath -u $3`
-    ;;
+    MSYS* | MINGW*)
+        prefix_unix=$(cygpath -u $3)
+        ;;
     *)
-	prefix_unix=$3
-    ;;
+        prefix_unix=$3
+        ;;
 esac
 
-if test "x$7" = "xwin7" ; then
+if test "x$7" = "xwin7"; then
     winver="0x0601"
 else
     winver="0x0A00"
@@ -39,11 +38,11 @@ export CFLAGS="-O2 -pipe -march=$1"
 export CXXFLAGS="-O2 -pipe -march=$1"
 export LDFLAGS="-L$3/lib -s"
 
-if test "x${jobopt}" = "xno" ; then
+if test "x${jobopt}" = "xno"; then
     jobopt=""
 fi
 
-if test "x${verbose}" = "xyes" ; then
+if test "x${verbose}" = "xyes"; then
     verbmake="V=1"
     verbcmake="ON"
     verbninja="-v"
@@ -55,20 +54,20 @@ fi
 
 case $2 in
     *.git)
-        bn=`basename $2`
+        bn=$(basename $2)
         dir_name=${bn%.*}
         ;;
-    *.xz|*.lzma|*.lz)
-        dir_name=`tar tJfh $2 | head -1 | cut -f1 -d"/"`
+    *.xz | *.lzma | *.lz)
+        dir_name=$(tar tJfh $2 | head -1 | cut -f1 -d"/")
         ;;
     *.bz2)
-        dir_name=`tar tjf $2 | head -1 | cut -f1 -d"/"`
+        dir_name=$(tar tjf $2 | head -1 | cut -f1 -d"/")
         ;;
-    *.gz|*.tgz)
-        dir_name=`tar tzf $2 | head -1 | cut -f1 -d"/"`
+    *.gz | *.tgz)
+        dir_name=$(tar tzf $2 | head -1 | cut -f1 -d"/")
         ;;
 esac
 
 cd $dir_name
 
-EWPI_PWD=`pwd`
+EWPI_PWD=$(pwd)

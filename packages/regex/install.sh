@@ -7,7 +7,7 @@ cp include/{regex,glob}.h src/regex
 cd src/regex
 
 mkdir -p bits
-cat >> bits/alltypes.h << EOF
+cat >>bits/alltypes.h <<EOF
 #include <stdint.h>
 typedef intptr_t regoff_t;
 #define CHARCLASS_NAME_MAX 14
@@ -34,10 +34,10 @@ sed -i \
     tre.h
 
 $4-gcc -std=c99 -Wall -Wextra -O2 -pipe -march=$1 -s -shared \
-       -o libregex-1.dll -Wl,--out-implib,libregex.dll.a \
-       regcomp.c regerror.c regexec.c tre-mem.c \
-       -I. \
-       > ../../../make.log 2>&1
+    -o libregex-1.dll -Wl,--out-implib,libregex.dll.a \
+    regcomp.c regerror.c regexec.c tre-mem.c \
+    -I. \
+    >../../../make.log 2>&1
 
 mkdir -p $3/{bin,include,lib}
 $4-strip libregex-1.dll
@@ -47,5 +47,5 @@ cp libregex.dll.a $3/lib
 cd ../..
 
 sed '/#include <bits.alltypes.h>/ s/.*/typedef intptr_t regoff_t;/' \
-  < include/regex.h \
-  > $3/include/regex.h
+    <include/regex.h \
+    >$3/include/regex.h
