@@ -252,6 +252,10 @@ static char *_ew_package_dir_dst = NULL;
 static int _ew_package_count_total = 0;
 static int _ew_package_deps_dst_count = 0;
 static int *_ew_package_index = NULL;
+/* Number of packages (within the computed dependency tree) that still need
+ * to be downloaded / extracted / installed.  These are recomputed from the
+ * dependency tree in _ew_packages_status_set(), so they only ever cover the
+ * packages actually selected for this run. */
 static int _ew_package_count_not_downloaded = 0;
 static int _ew_package_count_not_extracted = 0;
 static int _ew_package_count_not_installed = 0;
@@ -752,6 +756,10 @@ _ew_packages_get_git(void)
         if (!ewpi_map_new(&map, buf))
             continue;
 
+        /* calloc() gives us a zeroed Package: every optional field
+         * (deps_count, deps, sha512sum, flags...) starts at 0/NULL so a
+         * recipe missing keys cannot leave garbage that would later be
+         * free()'d twice. */
         _ew_packages_fill(&map, iter);
 
         ewpi_map_del(&map);
@@ -775,8 +783,9 @@ _ew_packages_get_git(void)
     return 1;
 
   free_pkgs:
-    free(_ewpi_pkgs);
-
+    /* Keep _ewpi_pkgs allocated (zeroed by calloc) so the cleanup loop in
+     * main() can free it exactly once; setting it to NULL here would make
+     * main() free an already-freed pointer. */
     return 0;
 }
 
@@ -848,6 +857,14 @@ _ew_copy(const char *path_git, const char *path_dst, const char *filename)
 
     return 0;
 }
+
+/* Forward declarations: the dependency tree is built before the status
+ * scan, and both steps reference each other. */
+static void
+_ew_packages_status_set(void);
+
+static void
+_ew_packages_tree(const char *pkg_name);
 
 static void
 _ew_packages_dst_set(const char *prefix)
@@ -936,43 +953,18 @@ _ew_packages_dst_set(const char *prefix)
 }
 
 static void
-_ew_packages_status_set()
+_ew_packages_status_set(void)
 {
-    DIR *dir;
-    struct dirent *f;
-
-    dir = opendir(_ew_package_dir_dst);
-    if (!dir)
-        return;
-
-    while ((f = readdir(dir)))
+    /* Walk the packages selected in the dependency tree (not every recipe
+     * on disk) and check their download/extract/install markers. */
+    for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         char buf[PATH_MAX];
         char buf_pkg[PATH_MAX];
-        Package *iter;
-
-        if ((strcmp(f->d_name, ".") == 0) ||
-            (strcmp(f->d_name, "..") == 0))
-            continue;
-
-        iter = NULL;
-        for (int i = 0; i < _ew_package_count_total; i++)
-        {
-            if (strcmp(_ewpi_pkgs[i].name, f->d_name) == 0)
-            {
-                iter = _ewpi_pkgs + i;
-                break;
-            }
-        }
-        if (!iter)
-        {
-            printf("Can not find the package %s, exiting...\n", f->d_name);
-            fflush(stdout);
-            exit(1);
-        }
+        Package *iter = _ewpi_pkgs + _ew_package_index[i];
 
         if (!ew_path_join(buf_pkg, sizeof(buf_pkg), _ew_package_dir_dst,
-                          f->d_name, NULL))
+                          iter->name, NULL))
             continue;
 
         if (ew_strlcpy(buf, buf_pkg, sizeof(buf)) < sizeof(buf) &&
@@ -1011,11 +1003,7 @@ _ew_packages_status_set()
         {
             _ew_package_count_not_installed++;
         }
-
-        iter++;
     }
-
-    closedir(dir);
 }
 
 static int
@@ -2125,22 +2113,36 @@ int main(int argc, char *argv[])
     _ew_packages_get_git();
     _ew_packages_dst_set(prefix);
 
-    printf(":: Check which package is not installed...\n");
-    fflush(stdout);
-    _ew_packages_status_set();
-
     printf(":: Build the dependency tree...\n");
     fflush(stdout);
     _ew_package_index = (int *)malloc((size_t)_ew_package_count_total * sizeof(int));
-    if(!_ew_package_index)
+    if (!_ew_package_index)
         return 1;
 
-    _ew_packages_tree("efl");
-    if (!efl)
+    /* Build the dependency tree from every recipe found in packages/ by
+     * default; the 'efl' meta-package is only pulled in when it was
+     * explicitly requested with --efl. Previously the tree was rooted at
+     * "efl" unconditionally, which made every run without --efl abort
+     * with "error: unknown dependency 'efl'" as soon as the efl recipe
+     * was not part of the loaded list (e.g. after it had been dropped,
+     * or when the copy under $prefix/share/ewpi/packages was stale). */
+    for (int i = 0; i < _ew_package_count_total; i++)
     {
-        _ew_package_count_total--;
-        _ew_package_count_not_installed--;
+        const Package *p = &_ewpi_pkgs[i];
+
+        if (!p->name)
+            continue;
+        if (strcmp(p->name, "efl") == 0 && !efl)
+            continue;
+        _ew_packages_tree(p->name);
     }
+
+    printf(":: Check which package is not installed...\n");
+    fflush(stdout);
+    /* Counters are recomputed here from the packages in the dependency
+     * tree only (not from every recipe on disk). */
+    _ew_packages_status_set();
+
     _ew_packages_not_installed_disp();
     _ew_packages_download();
     _ew_packages_longest_name();
