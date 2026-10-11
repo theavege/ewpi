@@ -1,6 +1,7 @@
 #define _DEFAULT_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -50,6 +51,92 @@
     (it[2] == 'l') && \
     (it[3] == ':') && \
     (it[4] == ' ')
+
+/* Build a shell command safely: no raw string concatenation, all dynamic
+ * values are single-quoted so they cannot break out of the shell word. */
+static int
+_ew_cmd(char *buf, size_t size, const char *fmt, ...)
+{
+    va_list ap;
+    int ret;
+
+    va_start(ap, fmt);
+    ret = vsnprintf(buf, size, fmt, ap);
+    va_end(ap);
+
+    if ((ret < 0) || ((size_t)ret >= size))
+    {
+        printf("error: command too long, buffer overflow prevented\n");
+        fflush(stdout);
+        return 0;
+    }
+
+    return 1;
+}
+
+/* Quote a string for safe use inside a /bin/sh command line. */
+static int
+_ew_sh_quote(char *out, size_t size, const char *in)
+{
+    size_t o = 0;
+    const char *i;
+
+    if (size < 3)
+        return 0;
+
+    out[o++] = '\'';
+    for (i = in; *i; i++)
+    {
+        if (*i == '\'')
+        {
+            /* close quote, escaped quote, reopen quote */
+            if ((o + 4) >= size)
+                return 0;
+            out[o++] = '\'';
+            out[o++] = '\\';
+            out[o++] = '\'';
+            out[o++] = '\'';
+        }
+        else
+        {
+            if ((o + 2) >= size)
+                return 0;
+            out[o++] = *i;
+        }
+    }
+    out[o++] = '\'';
+    out[o] = '\0';
+
+    return 1;
+}
+
+/* TLS certificate verification can only be disabled on explicit request,
+ * via the EWPI_INSECURE environment variable. Downloads are always
+ * integrity-checked against the pinned sha512sum when present. */
+static const char *
+_ew_wget_insecure_opt(void)
+{
+    static const char *cached = NULL;
+    static int checked = 0;
+
+    if (!checked)
+    {
+        checked = 1;
+        cached = getenv("EWPI_INSECURE");
+        if (cached && *cached && strcmp(cached, "0") != 0)
+        {
+            printf("warning: EWPI_INSECURE is set, TLS certificate checks are DISABLED\n");
+            fflush(stdout);
+            cached = "--no-check-certificate ";
+        }
+        else
+        {
+            cached = "";
+        }
+    }
+
+    return cached;
+}
 
 #define EWPI_SHA512SUM(it) \
     (it[0] == 's') && \
@@ -138,6 +225,11 @@ _ew_usage(const char *argv0)
     printf("  --verbose     verbose mode\n");
     printf("  --strip       strip DLL\n");
     printf("  --nsis        strip DLL and create the NSIS installer\n");
+    printf("\n");
+    printf("Environment:\n");
+    printf("  EWPI_INSECURE  if set (and not '0'), disable TLS certificate\n");
+    printf("                 verification for downloads (NOT recommended;\n");
+    printf("                 pinned sha512sum: entries still apply)\n");
     printf("  --efl         install the EFL\n");
     printf("  --jobs=VAL    maximum number of used jobs [default=maximum]\n");
     printf("  --clean       remove the archives and the created directories\n");
@@ -351,8 +443,6 @@ _ew_packages_dir_set(const char *prefix)
 {
     char buf[PATH_MAX];
     char *iter;
-    size_t l1;
-    size_t l2;
 
     /* first, package in the git repo */
     if (!getcwd(buf, PATH_MAX))
@@ -365,28 +455,13 @@ _ew_packages_dir_set(const char *prefix)
         iter++;
     }
 
-    l1 = strlen(buf);
-    l2 = sizeof("/packages") - 1;
-
-    if ((l1 + l2) > (PATH_MAX))
-        return 0;
-
-    if (!strcat(buf, "/packages"))
+    if (!_ew_cmd(buf, sizeof(buf), "%s/packages", buf))
         return 0;
 
     _ew_package_dir_git = strdup(buf);
 
     /* then, package in the destination */
-    *buf = 0;
-    l1 = strlen(prefix);
-    l2 = sizeof("/share/ewpi/packages") - 1;
-
-    if ((l1 + l2) > (PATH_MAX))
-        return 0;
-
-    strcpy(buf, prefix);
-
-    if (!strcat(buf, "/share/ewpi/packages"))
+    if (!_ew_cmd(buf, sizeof(buf), "%s/share/ewpi/packages", prefix))
         return 0;
 
     _ew_package_dir_dst = strdup(buf);
@@ -590,12 +665,9 @@ _ew_packages_get_git(void)
         if ((strcmp(f->d_name, ".") == 0) ||
             (strcmp(f->d_name, "..") == 0))
             continue;
-        strcpy(buf, _ew_package_dir_git);
-        strcat(buf, "/");
-        strcat(buf, f->d_name);
-        strcat(buf, "/");
-        strcat(buf, f->d_name);
-        strcat(buf, ".ewpi");
+        if (!_ew_cmd(buf, sizeof(buf), "%s/%s/%s.ewpi",
+                     _ew_package_dir_git, f->d_name, f->d_name))
+            continue;
 
         if (!ewpi_map_new(&map, buf))
             continue;
@@ -911,14 +983,16 @@ _ew_packages_verify(Package *pkg, const char *dir)
 {
     char buf[4096];
     char shafile[4096];
+    char qdir[2 * 4096];
+    char qurl[2 * 4096];
     FILE *f;
     int ret;
     long sz;
     char *content;
     int ok = 0;
 
-    strcpy(shafile, dir);
-    strcat(shafile, "/.sha512sum");
+    if (!_ew_cmd(shafile, sizeof(shafile), "%s/.sha512sum", dir))
+        return 0;
 
     /* Compare the stored hash with the one currently in the .ewpi file. */
     f = fopen(shafile, "r");
@@ -935,11 +1009,13 @@ _ew_packages_verify(Package *pkg, const char *dir)
     }
 
     /* Re-download is needed: fetch the official checksum file and verify. */
-    strcpy(buf, "cd ");
-    strcat(buf, dir);
-    strcat(buf, " && wget -q --no-check-certificate -O .sha512sum.tmp ");
-    strcat(buf, pkg->url);
-    strcat(buf, ".sha512sum");
+    if (!_ew_sh_quote(qdir, sizeof(qdir), dir) ||
+        !_ew_sh_quote(qurl, sizeof(qurl), pkg->url))
+        return 0;
+    if (!_ew_cmd(buf, sizeof(buf),
+                 "cd %s && wget -q %s-O .sha512sum.tmp %s.sha512sum",
+                 qdir, _ew_wget_insecure_opt(), qurl))
+        return 0;
     ret = system(buf);
     if (ret != 0)
     {
@@ -1020,11 +1096,10 @@ _ew_packages_download(void)
         char dir[4096];
 
         iter = _ewpi_pkgs + _ew_package_index[i];
-        strcpy(dir, _ew_package_dir_dst);
-        strcat(dir, "/");
-        strcat(dir, iter->name);
-        strcpy(buf, dir);
-        strcat(buf, "/downloaded");
+        if (!_ew_cmd(dir, sizeof(dir), "%s/%s", _ew_package_dir_dst, iter->name))
+            continue;
+        if (!_ew_cmd(buf, sizeof(buf), "%s/downloaded", dir))
+            continue;
         if (!_ew_file_exists(buf))
             count++;
         else if (!iter->sha512sum || _ew_packages_verify(iter, dir))
@@ -1041,33 +1116,41 @@ _ew_packages_download(void)
     for (int i = 0; i < _ew_package_count_total; i++)
     {
         int ret;
+        char dir[4096];
+        char qdir[2 * 4096];
+        char qurl[2 * 4096];
 
         iter = _ewpi_pkgs + _ew_package_index[i];
         if (iter->downloaded)
             continue;
 
-        strcpy(buf, "cd ");
-        strcat(buf, _ew_package_dir_dst);
-        strcat(buf, "/");
-        strcat(buf, iter->name);
-        strcat(buf, " && ");
+        if (!_ew_cmd(dir, sizeof(dir), "%s/%s", _ew_package_dir_dst, iter->name))
+            exit(1);
+        if (!_ew_sh_quote(qdir, sizeof(qdir), dir))
+            exit(1);
 
         if (iter->is_git)
         {
             if (iter->downloaded)
             {
-                strcat(buf, "git pull");
+                if (!_ew_cmd(buf, sizeof(buf), "cd %s && git pull", qdir))
+                    exit(1);
             }
             else
             {
-                strcat(buf, "git clone ");
-                strcat(buf, iter->url);
+                if (!_ew_sh_quote(qurl, sizeof(qurl), iter->url))
+                    exit(1);
+                if (!_ew_cmd(buf, sizeof(buf), "cd %s && git clone %s", qdir, qurl))
+                    exit(1);
             }
         }
         else
         {
-            strcat(buf, "wget -q --show-progress --no-check-certificate ");
-            strcat(buf, iter->url);
+            if (!_ew_sh_quote(qurl, sizeof(qurl), iter->url))
+                exit(1);
+            if (!_ew_cmd(buf, sizeof(buf), "cd %s && wget -q --show-progress %s%s",
+                         qdir, _ew_wget_insecure_opt(), qurl))
+                exit(1);
         }
         fflush(stdout);
         ret = system(buf);
@@ -1078,20 +1161,24 @@ _ew_packages_download(void)
         }
         else
         {
-            strcpy(buf, "echo 1 > ");
-            strcat(buf, _ew_package_dir_dst);
-            strcat(buf, "/");
-            strcat(buf, iter->name);
-            strcat(buf, "/downloaded");
-            system(buf);
+            if (!_ew_cmd(buf, sizeof(buf), "echo 1 > %s/downloaded", qdir))
+                exit(1);
+            ret = system(buf);
+            if (ret != 0)
+            {
+                printf("error while writing downloaded marker for package %s\n", iter->name);
+                exit(1);
+            }
             if (iter->is_git)
             {
-                strcpy(buf, "echo 1 > ");
-                strcat(buf, _ew_package_dir_dst);
-                strcat(buf, "/");
-                strcat(buf, iter->name);
-                strcat(buf, "/extracted");
-                system(buf);
+                if (!_ew_cmd(buf, sizeof(buf), "echo 1 > %s/extracted", qdir))
+                    exit(1);
+                ret = system(buf);
+                if (ret != 0)
+                {
+                    printf("error while writing extracted marker for package %s\n", iter->name);
+                    exit(1);
+                }
             }
         }
     }
@@ -1214,6 +1301,8 @@ _ew_packages_extract(int verbose)
         char taropt[5];
         int idx;
         int ret;
+        char qdir[2 * 4096];
+        char qtname[2 * 4096];
 
         iter = _ewpi_pkgs + _ew_package_index[i];
         if (iter->extracted)
@@ -1241,10 +1330,13 @@ _ew_packages_extract(int verbose)
 
         _ew_packages_status_disp(c, count, name, iter->version);
 
-        snprintf(buf, 4095,
-                 "cd %s/%s && tar x%s %s",
-                 _ew_package_dir_dst, name,
-                 taropt, tarname);
+        if (!_ew_cmd(buf, sizeof(buf), "%s/%s", _ew_package_dir_dst, name) ||
+            !_ew_sh_quote(qdir, sizeof(qdir), buf) ||
+            !_ew_sh_quote(qtname, sizeof(qtname), tarname))
+            exit(1);
+        if (!_ew_cmd(buf, sizeof(buf), "cd %s && tar x%s %s",
+                     qdir, taropt, qtname))
+            exit(1);
         fflush(stdout);
         ret = system(buf);
         if (ret != 0)
@@ -1254,12 +1346,14 @@ _ew_packages_extract(int verbose)
         }
         else
         {
-            strcpy(buf, "echo 1 > ");
-            strcat(buf, _ew_package_dir_dst);
-            strcat(buf, "/");
-            strcat(buf, name);
-            strcat(buf, "/extracted");
-            system(buf);
+            if (!_ew_cmd(buf, sizeof(buf), "echo 1 > %s/extracted", qdir))
+                exit(1);
+            ret = system(buf);
+            if (ret != 0)
+            {
+                printf(" error while writing extracted marker for %s\n", name);
+                exit(1);
+            }
         }
 
         c++;
@@ -1289,6 +1383,13 @@ _ew_packages_install(const char *prefix, const char *host, const char *arch, con
         const char *name;
         const char *tarname;
         int ret;
+        char qdir[2 * 4096];
+        char qtname[2 * 4096];
+        char qprefix[2 * 4096];
+        char qhost[2 * 4096];
+        char qarch[2 * 4096];
+        char qjobopt[2 * 4096];
+        char qwinver[2 * 4096];
 
         iter = _ewpi_pkgs + _ew_package_index[i];
         if (iter->installed)
@@ -1299,10 +1400,20 @@ _ew_packages_install(const char *prefix, const char *host, const char *arch, con
 
         _ew_packages_status_disp(c, _ew_package_count_not_installed, name, iter->version);
 
-        snprintf(buf, 4095,
-                 "cd %s/%s && sh ./install.sh %s %s %s %s %s %s %s",
-                 _ew_package_dir_dst, name,
-                 arch, tarname, prefix, host, (*jobopt == 0) ? "no" : jobopt, verbose ? "yes" : "no", winver);
+        if (!_ew_cmd(buf, sizeof(buf), "%s/%s", _ew_package_dir_dst, name) ||
+            !_ew_sh_quote(qdir, sizeof(qdir), buf) ||
+            !_ew_sh_quote(qtname, sizeof(qtname), tarname) ||
+            !_ew_sh_quote(qprefix, sizeof(qprefix), prefix) ||
+            !_ew_sh_quote(qhost, sizeof(qhost), host) ||
+            !_ew_sh_quote(qarch, sizeof(qarch), arch) ||
+            !_ew_sh_quote(qjobopt, sizeof(qjobopt), (*jobopt == 0) ? "no" : jobopt) ||
+            !_ew_sh_quote(qwinver, sizeof(qwinver), winver))
+            exit(1);
+        if (!_ew_cmd(buf, sizeof(buf),
+                     "cd %s && sh ./install.sh %s %s %s %s %s %s %s",
+                     qdir, qarch, qtname, qprefix, qhost, qjobopt,
+                     verbose ? "yes" : "no", qwinver))
+            exit(1);
         ret = system(buf);
         if (ret != 0)
         {
@@ -1328,12 +1439,14 @@ _ew_packages_install(const char *prefix, const char *host, const char *arch, con
         }
         else
         {
-            strcpy(buf, "echo 1 > ");
-            strcat(buf, _ew_package_dir_dst);
-            strcat(buf, "/");
-            strcat(buf, name);
-            strcat(buf, "/installed");
-            system(buf);
+            if (!_ew_cmd(buf, sizeof(buf), "echo 1 > %s/installed", qdir))
+                exit(1);
+            ret = system(buf);
+            if (ret != 0)
+            {
+                printf(" error while writing installed marker for %s\n", name);
+                exit(1);
+            }
         }
 
         c++;
@@ -1491,10 +1604,16 @@ _ew_recurse_strip(const char *path, const char *strip)
                     if (strcmp(ext, "dll") == 0)
                     {
                         char strip_cmd[4096];
+                        char qstrip[2 * 4096];
+                        char qfile[2 * 4096];
                         int ret;
 
-                        snprintf(strip_cmd, sizeof(strip_cmd), "%s %s",
-                                 strip, file);
+                        if (!_ew_sh_quote(qstrip, sizeof(qstrip), strip) ||
+                            !_ew_sh_quote(qfile, sizeof(qfile), file))
+                            continue;
+                        if (!_ew_cmd(strip_cmd, sizeof(strip_cmd), "%s %s",
+                                     qstrip, qfile))
+                            continue;
                         printf("  %s\n", file);
                         fflush(stdout);
                         ret = system(strip_cmd);
@@ -1536,6 +1655,8 @@ static void
 _ew_packages_nsis(const char *prefix, const char *host, const char *winver, int efl)
 {
     char buf[4096];
+    char qprefix[2 * 4096];
+    char qwinver[2 * 4096];
     const char *arch;
     const char *arch_suf;
     int ret;
@@ -1553,21 +1674,27 @@ _ew_packages_nsis(const char *prefix, const char *host, const char *winver, int 
         arch_suf = "64";
     }
 
+    if (!_ew_sh_quote(qprefix, sizeof(qprefix), prefix) ||
+        !_ew_sh_quote(qwinver, sizeof(qwinver), winver))
+        return;
+
     if (efl)
     {
         printf("\n:: Create EFL NSIS installer...\n");
         fflush(stdout);
-        snprintf(buf, 4095,
-                 "sh ./efl_nsis.sh %s %d.%d %s %s %s",
-                 prefix, _ew_vmaj, _ew_vmin, arch, arch_suf, winver);
+        if (!_ew_cmd(buf, sizeof(buf),
+                     "sh ./efl_nsis.sh %s %d.%d %s %s %s",
+                     qprefix, _ew_vmaj, _ew_vmin, arch, arch_suf, qwinver))
+            return;
     }
     else
     {
         printf("\n:: Create EWPI NSIS installer...\n");
         fflush(stdout);
-        snprintf(buf, 4095,
-                 "sh ./ewpi_nsis.sh %s %d.%d %s %s %s",
-                 prefix, _ew_vmaj, _ew_vmin, arch, arch_suf, winver);
+        if (!_ew_cmd(buf, sizeof(buf),
+                     "sh ./ewpi_nsis.sh %s %d.%d %s %s %s",
+                     qprefix, _ew_vmaj, _ew_vmin, arch, arch_suf, qwinver))
+            return;
     }
     ret = system(buf);
     if (ret != 0)
