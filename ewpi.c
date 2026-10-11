@@ -264,9 +264,11 @@ _ew_str_get(const unsigned char *start, const unsigned char *end)
 {
     char *str;
 
-    str = (char *)malloc(end - start + 1);
-    memcpy(str, start, end - start);
-    str[end - start] = '\0';
+    size_t len = (size_t)(end - start);
+
+    str = (char *)malloc(len + 1);
+    memcpy(str, start, len);
+    str[len] = '\0';
 
     return str;
 }
@@ -344,13 +346,13 @@ _ew_path_exists(const char *path)
     return S_ISDIR(buf.st_mode);
 }
 
-static int
+static ssize_t
 _ew_file_exists(const char *file)
 {
     struct stat buf;
 
     if ((stat(file, &buf) == 0) && S_ISREG(buf.st_mode))
-        return buf.st_size;
+        return (ssize_t)buf.st_size;
 
     return 0;
 }
@@ -362,7 +364,7 @@ _ew_mkdir(const char *pathname, int mode)
     return mkdir(pathname);
     (void)mode;
 #else
-    return mkdir(pathname, mode);
+    return mkdir(pathname, (mode_t)mode);
 #endif
 }
 
@@ -492,7 +494,7 @@ _ew_requirements(const char *host)
         }
 #endif
 
-        ret = ewpi_spawn(host, _ew_req_host[i], " --version");
+        ret = ewpi_spawnv(host, _ew_req_host[i], "--version");
         printf("  %s : %s\n", _ew_req_host[i], ret ? "yes" : "no");
         fflush(stdout);
         if (!ret) return 0;
@@ -687,7 +689,7 @@ _ew_packages_fill(Map *map, Package *pkg)
                         pkg->deps_count++;
                     iter++;
                 }
-                pkg->deps = (char **)malloc(pkg->deps_count * sizeof(char *));
+                pkg->deps = (char **)malloc((size_t)pkg->deps_count * sizeof(char *));
                 j = 0;
                 iter2++;
                 iter = iter2;
@@ -695,17 +697,23 @@ _ew_packages_fill(Map *map, Package *pkg)
                 {
                     if (*iter == ' ')
                     {
-                        pkg->deps[j] = (char *)malloc(iter - iter2 + 1);
-                        memcpy(pkg->deps[j], iter2, iter - iter2);
-                        pkg->deps[j][iter - iter2] = '\0';
+                        size_t dlen = (size_t)(iter - iter2);
+
+                        pkg->deps[j] = (char *)malloc(dlen + 1);
+                        memcpy(pkg->deps[j], iter2, dlen);
+                        pkg->deps[j][dlen] = '\0';
                         j++;
                         iter2 = iter + 1;
                     }
                     iter++;
                 }
-                pkg->deps[j] = (char *)malloc(iter - iter2 + 1);
-                memcpy(pkg->deps[j], iter2, iter - iter2);
-                pkg->deps[j][iter - iter2] = '\0';
+                {
+                    size_t dlen = (size_t)(iter - iter2);
+
+                    pkg->deps[j] = (char *)malloc(dlen + 1);
+                    memcpy(pkg->deps[j], iter2, dlen);
+                    pkg->deps[j][dlen] = '\0';
+                }
             }
         }
 
@@ -721,7 +729,7 @@ _ew_packages_get_git(void)
     struct dirent *f;
     Package *iter;
 
-    _ewpi_pkgs = (Package *)calloc(_ew_package_count_total, sizeof(Package));
+    _ewpi_pkgs = (Package *)calloc((size_t)_ew_package_count_total, sizeof(Package));
     if (!_ewpi_pkgs)
         return 0;
 
@@ -786,9 +794,13 @@ _ew_copy(const char *path_git, const char *path_dst, const char *filename)
         return 0;
 
     /* get f_git size */
-    size = _ew_file_exists(f_git);
-    if (!size)
-        return 0;
+    {
+        ssize_t fsize = _ew_file_exists(f_git);
+
+        if (fsize <= 0)
+            return 0;
+        size = (size_t)fsize;
+    }
 
     buf_git = (char *)malloc(size);
     if (!buf_git)
@@ -1269,8 +1281,12 @@ _ew_packages_longest_name()
     for (int i = 0; i < _ew_package_count_total; i++)
     {
         iter = _ewpi_pkgs + _ew_package_index[i];
-        if ((int)(strlen(iter->name) + 1 + strlen(iter->version)) > _ew_package_name_size_max)
-            _ew_package_name_size_max = strlen(iter->name) + 1 + strlen(iter->version);
+        {
+            int len = (int)(strlen(iter->name) + 1 + strlen(iter->version));
+
+            if (len > _ew_package_name_size_max)
+                _ew_package_name_size_max = len;
+        }
     }
 }
 
@@ -1298,8 +1314,13 @@ _ew_packages_status_disp(int i, int count, const char *name, const char* version
         len2 = strlen(version);
         for (j = 0; j < len2; j++)
             *iter++ = version[j];
-        for (j = 0; j < (_ew_package_name_size_max  - (len + 1 + len2)); j++)
-            *iter++ = ' ';
+        {
+            size_t pad = (_ew_package_name_size_max > (int)(len + 1 + len2)) ?
+                         (size_t)(_ew_package_name_size_max - (int)(len + 1 + len2)) : 0;
+
+            for (j = 0; j < pad; j++)
+                *iter++ = ' ';
+        }
     }
     else
     {
@@ -1953,7 +1974,7 @@ int main(int argc, char *argv[])
 
     printf(":: Build the dependency tree...\n");
     fflush(stdout);
-    _ew_package_index = (int *)malloc(_ew_package_count_total * sizeof(int));
+    _ew_package_index = (int *)malloc((size_t)_ew_package_count_total * sizeof(int));
     if(!_ew_package_index)
         return 1;
 

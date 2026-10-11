@@ -6,6 +6,7 @@
 #else
 # include <errno.h>
 # include <fcntl.h>
+# include <stdio.h>
 # include <stdlib.h>
 # include <sys/wait.h>
 # include <unistd.h>
@@ -15,7 +16,7 @@
 
 #ifdef _WIN32
 
-int ewpi_spawn(const char *host, const char *prog, const char *option)
+int ewpi_spawnv(const char *host, const char *prog, const char *arg)
 {
     char cmd[1024];
     STARTUPINFOA si;
@@ -32,18 +33,18 @@ int ewpi_spawn(const char *host, const char *prog, const char *option)
     if (prog == NULL || *prog == '\0')
         return 0;
 
-    if (option == NULL)
-        option = "";
+    if (arg == NULL)
+        arg = "";
 
     if (host != NULL && *host != '\0')
     {
         written = snprintf(cmd, sizeof(cmd), "%s-%s %s",
-                           host, prog, option);
+                           host, prog, arg);
     }
     else
     {
         written = snprintf(cmd, sizeof(cmd), "%s %s",
-                           prog, option);
+                           prog, arg);
     }
 
     if (written < 0 || (size_t)written >= sizeof(cmd))
@@ -123,11 +124,19 @@ cleanup:
     return 0;
 }
 
-#else
-
 int ewpi_spawn(const char *host, const char *prog, const char *option)
 {
+    return ewpi_spawnv(host, prog, option);
+}
+
+#else
+
+int ewpi_spawnv(const char *host, const char *prog, const char *arg)
+{
     pid_t pid;
+
+    if (prog == NULL || *prog == '\0')
+        return 0;
 
     pid = fork();
     if (pid < 0)
@@ -139,6 +148,7 @@ int ewpi_spawn(const char *host, const char *prog, const char *option)
         char cmd[256];
         char *args[3];
         int fd;
+        int written;
 
         fd = open("/dev/null", O_WRONLY);
         if (fd <  0) _exit(1);
@@ -146,16 +156,17 @@ int ewpi_spawn(const char *host, const char *prog, const char *option)
         if (dup2(fd, 2) < 0) _exit(1);
         if (close(fd) < 0) _exit(1);
 
-        *cmd = '\0';
-        if (host)
-        {
-            strcat(cmd, host);
-            strcat(cmd, "-");
-        }
-        strcat(cmd, prog);
+        if (host != NULL && *host != '\0')
+            written = snprintf(cmd, sizeof(cmd), "%s-%s", host, prog);
+        else
+            written = snprintf(cmd, sizeof(cmd), "%s", prog);
+
+        if (written < 0 || (size_t)written >= sizeof(cmd))
+            _exit(1);
+
         args[0] = cmd;
-        /* option may be an empty string: then exec with no extra argument. */
-        args[1] = (*option != '\0') ? (char *)option : NULL;
+        /* NULL or empty arg means: run with no extra argument. */
+        args[1] = (arg != NULL && *arg != '\0') ? (char *)arg : NULL;
         args[2] = NULL;
         execvp(args[0], args);
         _exit(errno);
@@ -172,6 +183,11 @@ int ewpi_spawn(const char *host, const char *prog, const char *option)
 
         return WIFEXITED(status) ? (WEXITSTATUS(status) == 0) : 0;
     }
+}
+
+int ewpi_spawn(const char *host, const char *prog, const char *option)
+{
+    return ewpi_spawnv(host, prog, option);
 }
 
 #endif
