@@ -1066,109 +1066,250 @@ _ew_packages_not_installed_disp(void)
     fflush(stdout);
 }
 
+/* Portable SHA-512 implementation (FIPS 180-4 reference style).
+ * Used to verify downloads against the sha512sum pinned in each recipe.
+ * Kept in-tree so ewpi has no build-time dependency on OpenSSL. */
+#define EW_SHA512_BLOCK_BYTES 128
+#define EW_SHA512_DIGEST_LEN  64
+
+typedef struct
+{
+    unsigned long long state[8];
+    unsigned long long bitlen;
+    unsigned char data[EW_SHA512_BLOCK_BYTES];
+    size_t datalen;
+} EwSha512Ctx;
+
+static const unsigned long long _ew_sha512_k[80] = {
+    0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL,
+    0xe9b5dba58189dbbcULL, 0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL,
+    0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL, 0xd807aa98a3030242ULL,
+    0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e1ULL,
+    0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL, 0x9bdc06a725c71235ULL,
+    0xc19bf174cf692694ULL, 0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL,
+    0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL, 0x5ce975e6276df135ULL,
+    0x76a98da64b71938dULL, 0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL,
+    0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL, 0xc6e00bf33da88fc2ULL,
+    0xd5a79147930aa725ULL, 0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
+    0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL,
+    0x53380d139d95b3dfULL, 0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL,
+    0x81c1979bca4487a7ULL, 0x92722c851482353bULL, 0xa2bfe8a14cf10364ULL,
+    0xa81a664bbc423001ULL, 0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
+    0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e308557712045ULL,
+    0x106aa07032bbd1b8ULL, 0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL,
+    0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL, 0x391c0cb3c5c95a63ULL,
+    0x4ed8aa4ae3418acbULL, 0x5b9cca4f7763e373ULL, 0x682e6ff3d6b7b8a3ULL,
+    0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL, 0x84c87814a1f0ab72ULL,
+    0x8cc702081a6439ecULL, 0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL,
+    0xbef9a3f7b2c67915ULL, 0xc67178f2e372532aULL, 0xca273eceea26619cULL,
+    0xd186b8c721c0c207ULL, 0xedeada4828825b2bULL, 0xf57d4f7f6eed4f57ULL,
+    0x06f067aa72176fbaULL, 0x0a637dc5a2cfeaefULL, 0x113f9804bef90daeULL,
+    0x1b710b35131c471bULL, 0x28db77f523047d84ULL, 0x32caab7140c72493ULL,
+    0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL, 0x4cc5d4becb3e42b6ULL,
+    0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL
+};
+
+static inline unsigned long long
+_ew_rotr64(unsigned long long x, unsigned int n)
+{
+    return (x >> n) | (x << (64 - n));
+}
+
+static void
+_ew_sha512_transform(EwSha512Ctx *ctx, const unsigned char *data)
+{
+    unsigned long long w[80];
+    unsigned long long a, b, c, d, e, f, g, h;
+    int t;
+
+    for (t = 0; t < 16; t++)
+    {
+        w[t] = ((unsigned long long)data[t * 8] << 56) |
+               ((unsigned long long)data[t * 8 + 1] << 48) |
+               ((unsigned long long)data[t * 8 + 2] << 40) |
+               ((unsigned long long)data[t * 8 + 3] << 32) |
+               ((unsigned long long)data[t * 8 + 4] << 24) |
+               ((unsigned long long)data[t * 8 + 5] << 16) |
+               ((unsigned long long)data[t * 8 + 6] << 8) |
+               ((unsigned long long)data[t * 8 + 7]);
+    }
+    for (t = 16; t < 80; t++)
+    {
+        unsigned long long s0 = _ew_rotr64(w[t - 15], 1) ^
+                                _ew_rotr64(w[t - 15], 8) ^ (w[t - 15] >> 7);
+        unsigned long long s1 = _ew_rotr64(w[t - 2], 19) ^
+                                _ew_rotr64(w[t - 2], 61) ^ (w[t - 2] >> 6);
+        w[t] = w[t - 16] + s0 + w[t - 7] + s1;
+    }
+
+    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];
+    e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];
+
+    for (t = 0; t < 80; t++)
+    {
+        unsigned long long s1 = _ew_rotr64(e, 14) ^ _ew_rotr64(e, 18) ^
+                                _ew_rotr64(e, 41);
+        unsigned long long ch = (e & f) ^ (~e & g);
+        unsigned long long t1 = h + s1 + ch + _ew_sha512_k[t] + w[t];
+        unsigned long long s0 = _ew_rotr64(a, 28) ^ _ew_rotr64(a, 34) ^
+                                _ew_rotr64(a, 39);
+        unsigned long long maj = (a & b) ^ (a & c) ^ (b & c);
+        unsigned long long t2 = s0 + maj;
+
+        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c;
+    ctx->state[3] += d; ctx->state[4] += e; ctx->state[5] += f;
+    ctx->state[6] += g; ctx->state[7] += h;
+}
+
+static void
+_ew_sha512_init(EwSha512Ctx *ctx)
+{
+    ctx->datalen = 0;
+    ctx->bitlen = 0;
+    ctx->state[0] = 0x6a09e667f3bcc908ULL;
+    ctx->state[1] = 0xbb67ae8584caa73bULL;
+    ctx->state[2] = 0x3c6ef372fe94f82bULL;
+    ctx->state[3] = 0xa54ff53a5f1d36f1ULL;
+    ctx->state[4] = 0x510e527fade682d1ULL;
+    ctx->state[5] = 0x9b05688c2b3e6c1fULL;
+    ctx->state[6] = 0x1f83d9abfb41bd6bULL;
+    ctx->state[7] = 0x5be0cd19137e2179ULL;
+}
+
+static void
+_ew_sha512_update(EwSha512Ctx *ctx, const unsigned char *data, size_t len)
+{
+    size_t i;
+
+    for (i = 0; i < len; i++)
+    {
+        ctx->data[ctx->datalen++] = data[i];
+        if (ctx->datalen == EW_SHA512_BLOCK_BYTES)
+        {
+            _ew_sha512_transform(ctx, ctx->data);
+            ctx->bitlen += 1024;
+            ctx->datalen = 0;
+        }
+    }
+}
+
+static void
+_ew_sha512_final(EwSha512Ctx *ctx, unsigned char *digest)
+{
+    unsigned long long bitlen;
+    size_t pad_start;
+    int i;
+
+    /* Save the true length before padding mutates the state. */
+    bitlen = ctx->bitlen + (unsigned long long)ctx->datalen * 8;
+
+    ctx->data[ctx->datalen++] = 0x80;
+    if (ctx->datalen > EW_SHA512_BLOCK_BYTES - 16)
+    {
+        while (ctx->datalen < EW_SHA512_BLOCK_BYTES)
+            ctx->data[ctx->datalen++] = 0;
+        _ew_sha512_transform(ctx, ctx->data);
+        ctx->datalen = 0;
+    }
+    pad_start = ctx->datalen;
+    while (ctx->datalen < EW_SHA512_BLOCK_BYTES)
+        ctx->data[ctx->datalen++] = 0;
+    for (i = 0; i < 8; i++)
+        ctx->data[EW_SHA512_BLOCK_BYTES - 1 - (size_t)i] =
+            (unsigned char)(bitlen >> (8 * i));
+    (void)pad_start;
+    _ew_sha512_transform(ctx, ctx->data);
+
+    for (i = 0; i < 8; i++)
+    {
+        int j;
+        for (j = 0; j < 8; j++)
+            digest[i * 8 + j] = (unsigned char)(ctx->state[i] >> (56 - 8 * j));
+    }
+}
+
 static int
 _ew_packages_verify(Package *pkg, const char *dir)
 {
-    char buf[4096];
+    char path[4096];
     char shafile[4096];
-    char qdir[2 * 4096];
-    char qurl[2 * 4096];
     FILE *f;
-    int ret;
-    long sz;
-    char *content;
-    int ok = 0;
+    size_t n;
+    EwSha512Ctx ctx;
+    unsigned char digest[EW_SHA512_DIGEST_LEN];
+    char hex[2 * EW_SHA512_DIGEST_LEN + 1];
+    size_t i;
 
     if (!_ew_cmd(shafile, sizeof(shafile), "%s/.sha512sum", dir))
         return 0;
 
-    /* Compare the stored hash with the one currently in the .ewpi file. */
+    /* No pinned hash: accept the download but do not mark it verified. */
+    if (!pkg->sha512sum)
+        return 0;
+
+    /* Fast path: previously verified against the same pinned hash. */
     f = fopen(shafile, "r");
     if (f)
     {
         char prev[129];
 
-        if (fgets(prev, sizeof(prev), f) && pkg->sha512sum &&
+        if (fgets(prev, sizeof(prev), f) &&
             strncmp(prev, pkg->sha512sum, 128) == 0)
-            ok = 1;
-        fclose(f);
-        if (ok)
-            return 1;
-    }
-
-    /* Re-download is needed: fetch the official checksum file and verify. */
-    if (!_ew_sh_quote(qdir, sizeof(qdir), dir) ||
-        !_ew_sh_quote(qurl, sizeof(qurl), pkg->url))
-        return 0;
-    if (!_ew_cmd(buf, sizeof(buf),
-                 "cd %s && wget -q %s-O .sha512sum.tmp %s.sha512sum",
-                 qdir, _ew_wget_insecure_opt(), qurl))
-        return 0;
-    ret = system(buf);
-    if (ret != 0)
-    {
-        printf("error while downloading checksum for package %s\n", pkg->name);
-        fflush(stdout);
-        remove(".sha512sum.tmp");
-        remove(shafile);
-        return 0;
-    }
-
-    f = fopen(".sha512sum.tmp", "rb");
-    if (!f)
-    {
-        remove(".sha512sum.tmp");
-        remove(shafile);
-        return 0;
-    }
-    fseek(f, 0, SEEK_END);
-    sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    content = (char *)malloc((sz > 0) ? (size_t)sz + 1 : 1);
-    if (!content)
-    {
-        fclose(f);
-        remove(".sha512sum.tmp");
-        return 0;
-    }
-    if (sz > 0 && fread(content, 1, (size_t)sz, f) == (size_t)sz)
-    {
-        char *line;
-        char *sep;
-
-        content[sz] = '\0';
-        line = strstr(content, pkg->tarname);
-        if (line)
         {
-            /* The hash precedes the filename, separated by whitespace. */
-            sep = line;
-            while (sep > content && *(sep - 1) != ' ' && *(sep - 1) != '\t' &&
-                   *(sep - 1) != '\n' && *(sep - 1) != '\r')
-                sep--;
-            while (*line == ' ' || *line == '\t')
-                line++;
-            if ((size_t)(line - sep) == strlen(pkg->sha512sum) &&
-                strncmp(sep, pkg->sha512sum, strlen(pkg->sha512sum)) == 0)
-                ok = 1;
+            fclose(f);
+            return 1;
         }
+        fclose(f);
     }
-    free(content);
+
+    /* If the archive is missing, there is nothing to verify yet. */
+    if (!_ew_cmd(path, sizeof(path), "%s/%s", dir, pkg->tarname))
+        return 0;
+    if (!_ew_file_exists(path))
+        return 0;
+
+    /* Compute the SHA-512 of the downloaded archive. */
+    f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    _ew_sha512_init(&ctx);
+    while ((n = fread(path, 1, sizeof(path), f)) > 0)
+        _ew_sha512_update(&ctx, (const unsigned char *)path, n);
+    if (ferror(f))
+    {
+        fclose(f);
+        return 0;
+    }
     fclose(f);
+    _ew_sha512_final(&ctx, digest);
+    for (i = 0; i < sizeof(digest); i++)
+        sprintf(hex + (2 * i), "%02x", digest[i]);
+    hex[sizeof(hex) - 1] = '\0';
 
-    if (ok)
+    if (strcmp(hex, pkg->sha512sum) == 0)
     {
-        rename(".sha512sum.tmp", shafile);
-    }
-    else
-    {
-        printf("checksum mismatch for package %s, exiting...\n", pkg->name);
-        fflush(stdout);
-        remove(".sha512sum.tmp");
-        remove(shafile);
-        exit(1);
+        /* Cache the result so re-runs skip recomputation. */
+        f = fopen(shafile, "w");
+        if (f)
+        {
+            fprintf(f, "%s\n", hex);
+            fclose(f);
+        }
+        return 1;
     }
 
-    return ok;
+    printf("checksum mismatch for package %s, exiting...\n", pkg->name);
+    printf("  expected: %s\n", pkg->sha512sum);
+    printf("  actual:   %s\n", hex);
+    fflush(stdout);
+    remove(shafile);
+    unlink(path);
+    exit(1);
+
+    return 0;
 }
 
 static void
@@ -1249,6 +1390,11 @@ _ew_packages_download(void)
         }
         else
         {
+            /* Verify the freshly downloaded archive against the pinned
+             * sha512sum before accepting it (exits on mismatch). */
+            if (!iter->is_git && iter->sha512sum &&
+                !_ew_packages_verify(iter, dir))
+                exit(1);
             if (!_ew_cmd(buf, sizeof(buf), "echo 1 > %s/downloaded", qdir))
                 exit(1);
             ret = system(buf);
