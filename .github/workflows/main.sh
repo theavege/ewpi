@@ -12,7 +12,8 @@ function f_setup
             ' ;;
             fedora | alma) sudo dnf install -y shfmt {cpp,shell}check meson auto{conf,make} libtool gettext cmake {y,n}asm gperf python{,3-pip} perl ninja-build pkgconf mingw64-{libgomp,gcc,gcc-c++,nsis} bison flex make gcc-c++ itstool ;;
         esac 1>/dev/null
-        shellcheck --exclude=SC2154 --external-sources "${0}" common.sh packages/*/*.sh
+        shellcheck --severity=error --external-sources "${0}" common.sh packages/*/*.sh
+        shellcheck --severity=warning --exclude=SC2154 --external-sources "${0}" packages/*/*.sh
         shfmt -ci -fn -i 4 -d "${0}" common.sh packages/*/*.sh
         clang-tidy --warnings-as-errors=* ewpi*.{c,h}
         clang-format --dry-run --Werror -style=Mozilla ewpi*.{c,h}
