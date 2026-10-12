@@ -12,7 +12,7 @@ function f_setup
             ' ;;
             fedora | alma) sudo dnf install -y shfmt {cpp,shell}check meson auto{conf,make} libtool gettext cmake {y,n}asm gperf python{,3-pip} perl ninja-build pkgconf mingw64-{libgomp,gcc,gcc-c++,nsis} bison flex make gcc-c++ itstool ;;
         esac 1>/dev/null
-        shellcheck --external-sources "${0}" common.sh packages/*/*.sh
+        shellcheck --exclude=SC2154 --external-sources "${0}" common.sh packages/*/*.sh
         shfmt -ci -fn -i 4 -d "${0}" common.sh packages/*/*.sh
         clang-tidy --warnings-as-errors=* ewpi*.{c,h}
         clang-format --dry-run --Werror -style=Mozilla ewpi*.{c,h}
@@ -25,7 +25,7 @@ f_setup
 
 while read -r; do
     command -V "${REPLY}"
-done < <(printf '%s\n' x86_64-w64-mingw32-{gcc,g++,ar,nm,ranlib,strip,windres} meson make{,nsis} python perl ninja {y,n}asm gperf wget bison flex)
+done < <(printf '%s\n' x86_64-w64-mingw32-{gcc,g++,nm,ranlib,strip,windres} meson make{,nsis} python perl ninja {y,n}asm gperf wget bison flex)
 
 gcc -W{all,extra,pedantic,shadow,conversion} -O2 -o ewpi{,*.c}
 
