@@ -17,7 +17,6 @@
 #else
 # include <linux/limits.h>
 # include <sys/mman.h>
-# include <unistd.h>
 # include <fcntl.h>
 #endif
 
@@ -225,19 +224,20 @@ ew_strlcat(char *dst, const char *src, size_t size)
 static char *
 ew_path_join(char *buf, size_t size, const char *a, const char *b, const char *c)
 {
-    size_t n;
+    if (a == NULL || b == NULL)
+        return NULL;
 
     if (ew_strlcpy(buf, a, size) >= size)
         return NULL;
-    n = ew_strlcat(buf, "/", size);
-    n = ew_strlcat(buf, b, size);
-    if (n >= size)
+    if (ew_strlcat(buf, "/", size) >= size)
+        return NULL;
+    if (ew_strlcat(buf, b, size) >= size)
         return NULL;
     if (c)
     {
-        n = ew_strlcat(buf, "/", size);
-        n = ew_strlcat(buf, c, size);
-        if (n >= size)
+        if (ew_strlcat(buf, "/", size) >= size)
+            return NULL;
+        if (ew_strlcat(buf, c, size) >= size)
             return NULL;
     }
 
@@ -553,6 +553,10 @@ _ew_packages_count_total()
 {
     DIR *dir;
     struct dirent *f;
+    char buf[PATH_MAX];
+
+    if (!_ew_package_dir_git)
+        return;
 
     dir = opendir(_ew_package_dir_git);
     if (!dir)
@@ -560,8 +564,18 @@ _ew_packages_count_total()
 
     while ((f = readdir(dir)))
     {
+        struct stat st;
+
         if ((strcmp(f->d_name, ".") == 0) ||
             (strcmp(f->d_name, "..") == 0))
+            continue;
+
+        /* Only count real package directories: this keeps the total in
+         * sync with _ew_packages_get_git(), which skips anything that is
+         * not a directory containing a recipe file. */
+        if (!ew_path_join(buf, sizeof(buf), _ew_package_dir_git, f->d_name, NULL))
+            continue;
+        if (stat(buf, &st) != 0 || !S_ISDIR(st.st_mode))
             continue;
 
         _ew_package_count_total++;
@@ -693,7 +707,9 @@ _ew_packages_fill(Map *map, Package *pkg)
                         pkg->deps_count++;
                     iter++;
                 }
-                pkg->deps = (char **)malloc((size_t)pkg->deps_count * sizeof(char *));
+                /* deps_count + 1 entries: one per space-separated token
+                 * plus the final token after the last space. */
+                pkg->deps = (char **)calloc((size_t)(pkg->deps_count + 1), sizeof(char *));
                 j = 0;
                 iter2++;
                 iter = iter2;
@@ -1004,18 +1020,6 @@ _ew_packages_status_set(void)
             _ew_package_count_not_installed++;
         }
     }
-}
-
-static int
-_ew_packages_find(const char *pkg_name)
-{
-    for (int idx = 0; idx < _ew_package_count_total; idx++)
-    {
-        if (_ewpi_pkgs[idx].name && strcmp(pkg_name, _ewpi_pkgs[idx].name) == 0)
-            return idx;
-    }
-
-    return -1;
 }
 
 static int
