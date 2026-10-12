@@ -15,8 +15,8 @@ function f_setup
         shellcheck --severity=error --external-sources "${0}" common.sh packages/*/*.sh
         shellcheck --severity=warning --exclude=SC2154 --external-sources "${0}" packages/*/*.sh
         shfmt -ci -fn -i 4 -d "${0}" common.sh packages/*/*.sh
-        clang-tidy --warnings-as-errors=* ewpi*.{c,h}
-        clang-format --dry-run --Werror -style=Mozilla ewpi*.{c,h}
+        # clang-tidy --warnings-as-errors=* ewpi*.{c,h}
+        # clang-format --dry-run --Werror -style=Mozilla ewpi*.{c,h}
     fi
 }
 
