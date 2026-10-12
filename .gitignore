@@ -1,4 +1,1 @@
-*.log
-*~
-ewpi.exe
-ewpi
+ewpi_asan
