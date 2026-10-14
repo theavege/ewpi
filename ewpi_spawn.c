@@ -191,3 +191,153 @@ int ewpi_spawn(const char *host, const char *prog, const char *option)
 }
 
 #endif
+
+#ifdef _WIN32
+
+static int
+_ew_cmd_append(char *dst, size_t cap, size_t *used, const char *bytes, size_t n)
+{
+    if (*used + n >= cap)
+        return 0;
+    memcpy(dst + *used, bytes, n);
+    *used += n;
+    dst[*used] = '\0';
+    return 1;
+}
+
+/* Command-line quoting rules used by the Microsoft C runtime. */
+static int
+_ew_cmd_append_arg(char *dst, size_t cap, size_t *used, const char *arg)
+{
+    size_t i = 0;
+    int quote = (*arg == '\0');
+
+    for (i = 0; arg[i] != '\0' && !quote; i++)
+    {
+        if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"')
+            quote = 1;
+    }
+
+    if (*used != 0 && !_ew_cmd_append(dst, cap, used, " ", 1))
+        return 0;
+    if (!quote)
+        return _ew_cmd_append(dst, cap, used, arg, strlen(arg));
+    if (!_ew_cmd_append(dst, cap, used, "\"", 1))
+        return 0;
+
+    i = 0;
+    while (1)
+    {
+        unsigned back = 0;
+
+        while (arg[i] == '\\')
+        {
+            back++;
+            i++;
+        }
+        if (arg[i] == '\0')
+        {
+            while (back > 0)
+            {
+                back--;
+                if (!_ew_cmd_append(dst, cap, used, "\\\\", 2))
+                    return 0;
+            }
+            break;
+        }
+        if (arg[i] == '"')
+        {
+            while (back > 0)
+            {
+                back--;
+                if (!_ew_cmd_append(dst, cap, used, "\\\\", 2))
+                    return 0;
+            }
+            if (!_ew_cmd_append(dst, cap, used, "\\\"", 2))
+                return 0;
+            i++;
+            continue;
+        }
+        while (back > 0)
+        {
+            back--;
+            if (!_ew_cmd_append(dst, cap, used, "\\", 1))
+                return 0;
+        }
+        if (!_ew_cmd_append(dst, cap, used, &arg[i], 1))
+            return 0;
+        i++;
+    }
+
+    return _ew_cmd_append(dst, cap, used, "\"", 1);
+}
+
+#endif
+
+int ewpi_run(const char *cwd, const char *const argv[])
+{
+    if (argv == NULL || argv[0] == NULL || argv[0][0] == '\0')
+        return 0;
+
+#ifdef _WIN32
+    char cmd[32768];
+    size_t used = 0;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    DWORD exit_code = 1;
+    int i;
+
+    cmd[0] = '\0';
+    for (i = 0; argv[i] != NULL; i++)
+    {
+        if (!_ew_cmd_append_arg(cmd, sizeof(cmd), &used, argv[i]))
+            return 0;
+    }
+
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, cwd, &si, &pi))
+        return 0;
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    if (!GetExitCodeProcess(pi.hProcess, &exit_code))
+        exit_code = 1;
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return exit_code == 0;
+#else
+    pid_t pid = fork();
+
+    if (pid < 0)
+        return 0;
+
+    if (pid == 0)
+    {
+        char *args[64];
+        int i;
+
+        if (cwd != NULL && cwd[0] != '\0' && chdir(cwd) != 0)
+            _exit(127);
+        for (i = 0; argv[i] != NULL; i++)
+        {
+            if (i >= 63)
+                _exit(127);
+            args[i] = (char *)argv[i];
+        }
+        args[i] = NULL;
+        execvp(args[0], args);
+        _exit(127);
+    }
+
+    {
+        int status = 0;
+
+        if (waitpid(pid, &status, 0) < 0)
+            return 0;
+        return WIFEXITED(status) ? (WEXITSTATUS(status) == 0) : 0;
+    }
+#endif
+}
+

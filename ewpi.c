@@ -51,8 +51,7 @@
     (it[3] == ':') && \
     (it[4] == ' ')
 
-/* Build a shell command safely: no raw string concatenation, all dynamic
- * values are single-quoted so they cannot break out of the shell word. */
+/* Bounded printf. Returns 0 if the formatted text does not fit. */
 static int
 _ew_cmd(char *buf, size_t size, const char *fmt, ...)
 {
@@ -71,70 +70,6 @@ _ew_cmd(char *buf, size_t size, const char *fmt, ...)
     }
 
     return 1;
-}
-
-/* Quote a string for safe use inside a /bin/sh command line. */
-static int
-_ew_sh_quote(char *out, size_t size, const char *in)
-{
-    size_t o = 0;
-    const char *i;
-
-    if (size < 3)
-        return 0;
-
-    out[o++] = '\'';
-    for (i = in; *i; i++)
-    {
-        if (*i == '\'')
-        {
-            /* close quote, escaped quote, reopen quote */
-            if ((o + 4) >= size)
-                return 0;
-            out[o++] = '\'';
-            out[o++] = '\\';
-            out[o++] = '\'';
-            out[o++] = '\'';
-        }
-        else
-        {
-            if ((o + 2) >= size)
-                return 0;
-            out[o++] = *i;
-        }
-    }
-    out[o++] = '\'';
-    out[o] = '\0';
-
-    return 1;
-}
-
-/* TLS certificate verification can only be disabled on explicit request,
- * via the EWPI_INSECURE environment variable. Downloads are always
- * integrity-checked against the pinned sha512sum when present. */
-static const char *
-_ew_wget_insecure_opt(void)
-{
-    static const char *cached = NULL;
-    static int checked = 0;
-
-    if (!checked)
-    {
-        checked = 1;
-        cached = getenv("EWPI_INSECURE");
-        if (cached && *cached && strcmp(cached, "0") != 0)
-        {
-            printf("warning: EWPI_INSECURE is set, TLS certificate checks are DISABLED\n");
-            fflush(stdout);
-            cached = "--no-check-certificate ";
-        }
-        else
-        {
-            cached = "";
-        }
-    }
-
-    return cached;
 }
 
 #define EWPI_SHA512SUM(it) \
@@ -252,6 +187,10 @@ static char *_ew_package_dir_dst = NULL;
 static int _ew_package_count_total = 0;
 static int _ew_package_deps_dst_count = 0;
 static int *_ew_package_index = NULL;
+static unsigned char *_ew_package_visiting = NULL;
+#define EW_ONLY_MAX 32
+static const char *_ew_only[EW_ONLY_MAX];
+static int _ew_only_count = 0;
 /* Number of packages (within the computed dependency tree) that still need
  * to be downloaded / extracted / installed.  These are recomputed from the
  * dependency tree in _ew_packages_status_set(), so they only ever cover the
@@ -298,12 +237,8 @@ _ew_usage(const char *argv0)
     printf("  --verbose     verbose mode\n");
     printf("  --strip       strip DLL\n");
     printf("  --nsis        strip DLL and create the NSIS installer\n");
-    printf("\n");
-    printf("Environment:\n");
-    printf("  EWPI_INSECURE  if set (and not '0'), disable TLS certificate\n");
-    printf("                 verification for downloads (NOT recommended;\n");
-    printf("                 pinned sha512sum: entries still apply)\n");
-    printf("  --efl         install the EFL\n");
+    printf("  --package=NAME  build NAME and its dependencies (repeatable)\n");
+    printf("  --efl         also install the EFL meta-package\n");
     printf("  --jobs=VAL    maximum number of used jobs [default=maximum]\n");
     printf("  --clean       remove the archives and the created directories\n");
     printf("                  (not removed by default)\n");
@@ -454,67 +389,74 @@ _ew_requirements(const char *host)
 {
     int ret;
 
+#ifdef _WIN32
+    char gcc_path[4096];
+    char dir[4096];
+    HMODULE mod;
+    char *slash;
+    DWORD len;
+
+    mod = LoadLibraryA("gcc.exe");
+    if (!mod)
+        return 0;
+    len = GetModuleFileNameA(mod, gcc_path, sizeof(gcc_path));
+    FreeLibrary(mod);
+    if (!len)
+        return 0;
+    slash = strrchr(gcc_path, '\\');
+    if (!slash)
+        return 0;
+    slash[1] = '\0';
+    if (ew_strlcpy(dir, gcc_path, sizeof(dir)) >= sizeof(dir))
+        return 0;
+
     for (int i = 0; _ew_req_host[i]; i++)
     {
-#ifdef _WIN32
-        char old_file[4096];
-        char new_file[4096];
-        HMODULE mod;
-        char *last;
-        DWORD len;
-        BOOL res;
+        char src_path[4096];
+        char dst_path[4096];
 
-        mod = LoadLibrary("gcc.exe");
-        if (!mod)
+        if (ew_strlcpy(src_path, dir, sizeof(src_path)) >= sizeof(src_path) ||
+            ew_strlcat(src_path, _ew_req_host[i], sizeof(src_path)) >= sizeof(src_path) ||
+            ew_strlcat(src_path, ".exe", sizeof(src_path)) >= sizeof(src_path))
             return 0;
-
-        len = GetModuleFileName(mod, old_file, sizeof(old_file));
-        FreeLibrary(mod);
-
-        if (!len)
+        if (ew_strlcpy(dst_path, dir, sizeof(dst_path)) >= sizeof(dst_path) ||
+            ew_strlcat(dst_path, host, sizeof(dst_path)) >= sizeof(dst_path) ||
+            ew_strlcat(dst_path, "-", sizeof(dst_path)) >= sizeof(dst_path) ||
+            ew_strlcat(dst_path, _ew_req_host[i], sizeof(dst_path)) >= sizeof(dst_path) ||
+            ew_strlcat(dst_path, ".exe", sizeof(dst_path)) >= sizeof(dst_path))
             return 0;
-
-        old_file[len] = 0; /* not necessary, but i'm paranoid */
-        last = strrchr(old_file, '\\');
-        *(last + 1) = 0;
-        ew_strlcpy(new_file, old_file, sizeof(new_file));
-
-        if (i >= 2)
-        {
-            size_t n;
-
-            n = ew_strlcat(old_file, _ew_req_host[i], sizeof(old_file));
-            n += ew_strlcat(old_file, ".exe", sizeof(old_file));
-
-            n = ew_strlcat(new_file, host, sizeof(new_file));
-            n = ew_strlcat(new_file, "-", sizeof(new_file));
-            n = ew_strlcat(new_file, _ew_req_host[i], sizeof(new_file));
-            n = ew_strlcat(new_file, ".exe", sizeof(new_file));
-            if (n >= sizeof(old_file) || n >= sizeof(new_file))
-                return 0;
-
-            res = CopyFile(old_file, new_file, FALSE);
-            if (!res) return 0;
-        }
-#endif
+        /* Overwrite so a second run still works. */
+        if (!CopyFileA(src_path, dst_path, FALSE))
+            return 0;
 
         ret = ewpi_spawnv(host, _ew_req_host[i], "--version");
         printf("  %s : %s\n", _ew_req_host[i], ret ? "yes" : "no");
         fflush(stdout);
-        if (!ret) return 0;
+        if (!ret)
+            return 0;
     }
+#else
+    for (int i = 0; _ew_req_host[i]; i++)
+    {
+        ret = ewpi_spawnv(host, _ew_req_host[i], "--version");
+        printf("  %s : %s\n", _ew_req_host[i], ret ? "yes" : "no");
+        fflush(stdout);
+        if (!ret)
+            return 0;
+    }
+#endif
 
     for (int i = 0; _ew_req[i][0]; i++)
     {
         ret = ewpi_spawn(NULL, _ew_req[i][0], _ew_req[i][1]);
         printf("  %s : %s\n", _ew_req[i][0], ret ? "yes" : "no");
         fflush(stdout);
-        if (ret == 0) return 0;
+        if (ret == 0)
+            return 0;
     }
 
     return 1;
 }
-
 static int
 _ew_packages_dir_set(const char *prefix)
 {
@@ -709,7 +651,7 @@ _ew_packages_fill(Map *map, Package *pkg)
                 }
                 /* deps_count + 1 entries: one per space-separated token
                  * plus the final token after the last space. */
-                pkg->deps = (char **)calloc((size_t)(pkg->deps_count + 1), sizeof(char *));
+                pkg->deps = (char **)calloc((size_t)pkg->deps_count + 1u, sizeof(char *));
                 j = 0;
                 iter2++;
                 iter = iter2;
@@ -745,6 +687,9 @@ static int
 _ew_packages_get_git(void)
 {
     char buf[PATH_MAX];
+
+    if (_ew_package_count_total <= 0)
+        return 0;
     DIR *dir;
     struct dirent *f;
     Package *iter;
@@ -966,6 +911,7 @@ _ew_packages_dst_set(const char *prefix)
         ew_strlcat(buf_dst, "/share/ewpi", sizeof(buf_dst)) >= sizeof(buf_dst))
         return;
     _ew_copy(buf_git, buf_dst, "common.sh");
+    _ew_copy(buf_git, buf_dst, "drivers.sh");
 }
 
 static void
@@ -1038,9 +984,7 @@ static void
 _ew_packages_tree(const char *pkg_name)
 {
     int idx;
-    int already_in = 0;
 
-    /* get the index of the package */
     idx = _ew_packages_find(pkg_name);
     if (idx < 0)
     {
@@ -1049,22 +993,31 @@ _ew_packages_tree(const char *pkg_name)
         exit(1);
     }
 
-    /* guard against dependency loops */
     for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         if (_ew_package_index[i] == idx)
-            already_in = 1;
+            return;
     }
-    if (already_in)
-        return;
+    if (_ew_package_visiting[idx])
+    {
+        printf("error: dependency cycle at '%s', exiting...\n", pkg_name);
+        fflush(stdout);
+        exit(1);
+    }
+
+    /* Dependencies are recorded first so install order is deps-before-user. */
+    _ew_package_visiting[idx] = 1;
+    for (int i = 0; i < _ewpi_pkgs[idx].deps_count; i++)
+    {
+        if (!_ewpi_pkgs[idx].deps[i] || !_ewpi_pkgs[idx].deps[i][0])
+            continue;
+        _ew_packages_tree(_ewpi_pkgs[idx].deps[i]);
+    }
+    _ew_package_visiting[idx] = 0;
 
     _ew_package_index[_ew_package_deps_dst_count] = idx;
     _ew_package_deps_dst_count++;
-
-    for (int i = 0; i < _ewpi_pkgs[idx].deps_count; i++)
-        _ew_packages_tree(_ewpi_pkgs[idx].deps[i]);
 }
-
 static void
 _ew_packages_not_installed_disp(void)
 {
@@ -1139,14 +1092,16 @@ _ew_sha512_transform(EwSha512Ctx *ctx, const unsigned char *data)
 
     for (t = 0; t < 16; t++)
     {
-        w[t] = ((unsigned long long)data[t * 8] << 56) |
-               ((unsigned long long)data[t * 8 + 1] << 48) |
-               ((unsigned long long)data[t * 8 + 2] << 40) |
-               ((unsigned long long)data[t * 8 + 3] << 32) |
-               ((unsigned long long)data[t * 8 + 4] << 24) |
-               ((unsigned long long)data[t * 8 + 5] << 16) |
-               ((unsigned long long)data[t * 8 + 6] << 8) |
-               ((unsigned long long)data[t * 8 + 7]);
+        size_t off = (size_t)t * 8u;
+
+        w[t] = ((unsigned long long)data[off] << 56) |
+               ((unsigned long long)data[off + 1] << 48) |
+               ((unsigned long long)data[off + 2] << 40) |
+               ((unsigned long long)data[off + 3] << 32) |
+               ((unsigned long long)data[off + 4] << 24) |
+               ((unsigned long long)data[off + 5] << 16) |
+               ((unsigned long long)data[off + 6] << 8) |
+               ((unsigned long long)data[off + 7]);
     }
     for (t = 16; t < 80; t++)
     {
@@ -1291,8 +1246,12 @@ _ew_packages_verify(Package *pkg, const char *dir)
     if (!f)
         return 0;
     _ew_sha512_init(&ctx);
-    while ((n = fread(path, 1, sizeof(path), f)) > 0)
-        _ew_sha512_update(&ctx, (const unsigned char *)path, n);
+    {
+        unsigned char block[8192];
+
+        while ((n = fread(block, 1, sizeof(block), f)) > 0)
+            _ew_sha512_update(&ctx, block, n);
+    }
     if (ferror(f))
     {
         fclose(f);
@@ -1301,7 +1260,7 @@ _ew_packages_verify(Package *pkg, const char *dir)
     fclose(f);
     _ew_sha512_final(&ctx, digest);
     for (i = 0; i < sizeof(digest); i++)
-        sprintf(hex + (2 * i), "%02x", digest[i]);
+        snprintf(hex + (2 * i), 3, "%02x", (unsigned int)digest[i]);
     hex[sizeof(hex) - 1] = '\0';
 
     if (strcmp(hex, pkg->sha512sum) == 0)
@@ -1327,24 +1286,44 @@ _ew_packages_verify(Package *pkg, const char *dir)
     return 0;
 }
 
+static int
+_ew_write_marker(const char *dir, const char *name)
+{
+    char path[EW_PATH_SIZE];
+    FILE *out;
+
+    if (!ew_path_join(path, sizeof(path), dir, name, NULL))
+        return 0;
+    out = fopen(path, "w");
+    if (!out)
+        return 0;
+    if (fputs("1\n", out) < 0)
+    {
+        fclose(out);
+        return 0;
+    }
+    return fclose(out) == 0;
+}
+
 static void
 _ew_packages_download(void)
 {
-    char buf[4096];
     Package *iter;
     int count;
 
     count = 0;
     for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
-        char dir[4096];
+        char dir[EW_PATH_SIZE];
+        char marker[EW_PATH_SIZE];
 
         iter = _ewpi_pkgs + _ew_package_index[i];
-        if (!_ew_cmd(dir, sizeof(dir), "%s/%s", _ew_package_dir_dst, iter->name))
+        if (!iter->name)
             continue;
-        if (!_ew_cmd(buf, sizeof(buf), "%s/downloaded", dir))
+        if (!ew_path_join(dir, sizeof(dir), _ew_package_dir_dst, iter->name, NULL) ||
+            !ew_path_join(marker, sizeof(marker), dir, "downloaded", NULL))
             continue;
-        if (!_ew_file_exists(buf))
+        if (!_ew_file_exists(marker))
             count++;
         else if (!iter->sha512sum || _ew_packages_verify(iter, dir))
             iter->downloaded = 1;
@@ -1359,80 +1338,50 @@ _ew_packages_download(void)
     fflush(stdout);
     for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
-        int ret;
-        char dir[4096];
-        char qdir[2 * 4096];
-        char qurl[2 * 4096];
+        char dir[EW_PATH_SIZE];
 
         iter = _ewpi_pkgs + _ew_package_index[i];
         if (iter->downloaded)
             continue;
-
-        if (!_ew_cmd(dir, sizeof(dir), "%s/%s", _ew_package_dir_dst, iter->name))
-            exit(1);
-        if (!_ew_sh_quote(qdir, sizeof(qdir), dir))
+        if (!iter->name ||
+            !ew_path_join(dir, sizeof(dir), _ew_package_dir_dst, iter->name, NULL))
             exit(1);
 
         if (iter->is_git)
         {
-            if (iter->downloaded)
+            const char *const argv[] = {"git", "clone", iter->url, NULL};
+
+            if (!ewpi_run(dir, argv))
             {
-                if (!_ew_cmd(buf, sizeof(buf), "cd %s && git pull", qdir))
-                    exit(1);
-            }
-            else
-            {
-                if (!_ew_sh_quote(qurl, sizeof(qurl), iter->url))
-                    exit(1);
-                if (!_ew_cmd(buf, sizeof(buf), "cd %s && git clone %s", qdir, qurl))
-                    exit(1);
+                printf("error while downloading package %s\n", iter->name);
+                exit(1);
             }
         }
         else
         {
-            if (!_ew_sh_quote(qurl, sizeof(qurl), iter->url))
+            const char *const argv[] = {
+                "wget", "-q", "--show-progress", "-O", iter->tarname, iter->url, NULL};
+
+            if (!ewpi_run(dir, argv))
+            {
+                printf("error while downloading package %s\n", iter->name);
                 exit(1);
-            if (!_ew_cmd(buf, sizeof(buf), "cd %s && wget -q --show-progress %s%s",
-                         qdir, _ew_wget_insecure_opt(), qurl))
+            }
+            if (iter->sha512sum && !_ew_packages_verify(iter, dir))
                 exit(1);
         }
-        fflush(stdout);
-        ret = system(buf);
-        if (ret != 0)
+        if (!_ew_write_marker(dir, "downloaded"))
         {
-            printf("error while downloading package %s (ret = %d)\n", iter->name, ret);
+            printf("error while writing downloaded marker for package %s\n", iter->name);
             exit(1);
         }
-        else
+        if (iter->is_git && !_ew_write_marker(dir, "extracted"))
         {
-            /* Verify the freshly downloaded archive against the pinned
-             * sha512sum before accepting it (exits on mismatch). */
-            if (!iter->is_git && iter->sha512sum &&
-                !_ew_packages_verify(iter, dir))
-                exit(1);
-            if (!_ew_cmd(buf, sizeof(buf), "echo 1 > %s/downloaded", qdir))
-                exit(1);
-            ret = system(buf);
-            if (ret != 0)
-            {
-                printf("error while writing downloaded marker for package %s\n", iter->name);
-                exit(1);
-            }
-            if (iter->is_git)
-            {
-                if (!_ew_cmd(buf, sizeof(buf), "echo 1 > %s/extracted", qdir))
-                    exit(1);
-                ret = system(buf);
-                if (ret != 0)
-                {
-                    printf("error while writing extracted marker for package %s\n", iter->name);
-                    exit(1);
-                }
-            }
+            printf("error while writing extracted marker for package %s\n", iter->name);
+            exit(1);
         }
     }
 }
-
 static void
 _ew_packages_longest_name()
 {
@@ -1442,6 +1391,8 @@ _ew_packages_longest_name()
     for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         iter = _ewpi_pkgs + _ew_package_index[i];
+        if (!iter->name || !iter->version)
+            continue;
         {
             int len = (int)(strlen(iter->name) + 1 + strlen(iter->version));
 
@@ -1525,7 +1476,7 @@ _ew_packages_status_disp(int i, int count, const char *name, const char* version
 static void
 _ew_packages_extract(int verbose)
 {
-    char buf[4096];
+    char buf[EW_PATH_SIZE];
     Package *iter;
     int count;
     int c;
@@ -1534,8 +1485,7 @@ _ew_packages_extract(int verbose)
     for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         iter = _ewpi_pkgs + _ew_package_index[i];
-        if (!ew_path_join(buf, sizeof(buf), _ew_package_dir_dst, iter->name,
-                          "extracted"))
+        if (!ew_path_join(buf, sizeof(buf), _ew_package_dir_dst, iter->name, "extracted"))
             continue;
         if (!_ew_file_exists(buf))
             count++;
@@ -1555,11 +1505,9 @@ _ew_packages_extract(int verbose)
         const char *name;
         const char *tarname;
         const char *ext;
-        char taropt[5];
+        char taropt[8];
         int idx;
-        int ret;
-        char qdir[2 * 4096];
-        char qtname[2 * 4096];
+        char dir[EW_PATH_SIZE];
 
         iter = _ewpi_pkgs + _ew_package_index[i];
         if (iter->extracted)
@@ -1568,9 +1516,12 @@ _ew_packages_extract(int verbose)
         name = iter->name;
         tarname = iter->tarname;
         ext = strrchr(tarname, '.');
+        if (!ext)
+            exit(1);
         ext++;
 
         idx = 0;
+        taropt[idx++] = 'x';
         if (verbose)
             taropt[idx++] = 'v';
         if ((strcmp(ext, "gz") == 0) || (strcmp(ext, "tgz") == 0))
@@ -1587,30 +1538,22 @@ _ew_packages_extract(int verbose)
 
         _ew_packages_status_disp(c, count, name, iter->version);
 
-        if (!_ew_cmd(buf, sizeof(buf), "%s/%s", _ew_package_dir_dst, name) ||
-            !_ew_sh_quote(qdir, sizeof(qdir), buf) ||
-            !_ew_sh_quote(qtname, sizeof(qtname), tarname))
+        if (!ew_path_join(dir, sizeof(dir), _ew_package_dir_dst, name, NULL))
             exit(1);
-        if (!_ew_cmd(buf, sizeof(buf), "cd %s && tar x%s %s",
-                     qdir, taropt, qtname))
-            exit(1);
-        fflush(stdout);
-        ret = system(buf);
-        if (ret != 0)
         {
-            printf(" Can not extract %s\n", tarname);
-            exit(1);
-        }
-        else
-        {
-            if (!_ew_cmd(buf, sizeof(buf), "echo 1 > %s/extracted", qdir))
-                exit(1);
-            ret = system(buf);
-            if (ret != 0)
+            const char *const argv[] = {"tar", taropt, tarname, NULL};
+
+            fflush(stdout);
+            if (!ewpi_run(dir, argv))
             {
-                printf(" error while writing extracted marker for %s\n", name);
+                printf(" Can not extract %s\n", tarname);
                 exit(1);
             }
+        }
+        if (!_ew_write_marker(dir, "extracted"))
+        {
+            printf(" error while writing extracted marker for %s\n", name);
+            exit(1);
         }
 
         c++;
@@ -1619,11 +1562,10 @@ _ew_packages_extract(int verbose)
     _ew_packages_status_disp(count - 1, count, NULL, NULL);
     printf("\n");
 }
-
 static void
 _ew_packages_install(const char *prefix, const char *host, const char *arch, const char *jobopt, int verbose, const char *winver)
 {
-    char buf[4096];
+    char buf[EW_PATH_SIZE];
     Package *iter;
     int c;
     FILE *f;
@@ -1639,14 +1581,9 @@ _ew_packages_install(const char *prefix, const char *host, const char *arch, con
     {
         const char *name;
         const char *tarname;
-        int ret;
-        char qdir[2 * 4096];
-        char qtname[2 * 4096];
-        char qprefix[2 * 4096];
-        char qhost[2 * 4096];
-        char qarch[2 * 4096];
-        char qjobopt[2 * 4096];
-        char qwinver[2 * 4096];
+        char dir[EW_PATH_SIZE];
+        const char *jobs;
+        const char *verb;
 
         iter = _ewpi_pkgs + _ew_package_index[i];
         if (iter->installed)
@@ -1654,65 +1591,54 @@ _ew_packages_install(const char *prefix, const char *host, const char *arch, con
 
         name = iter->name;
         tarname = iter->tarname;
+        jobs = (jobopt[0] == '\0') ? "no" : jobopt;
+        verb = verbose ? "yes" : "no";
 
         _ew_packages_status_disp(c, _ew_package_count_not_installed, name, iter->version);
 
-        if (!_ew_cmd(buf, sizeof(buf), "%s/%s", _ew_package_dir_dst, name) ||
-            !_ew_sh_quote(qdir, sizeof(qdir), buf) ||
-            !_ew_sh_quote(qtname, sizeof(qtname), tarname) ||
-            !_ew_sh_quote(qprefix, sizeof(qprefix), prefix) ||
-            !_ew_sh_quote(qhost, sizeof(qhost), host) ||
-            !_ew_sh_quote(qarch, sizeof(qarch), arch) ||
-            !_ew_sh_quote(qjobopt, sizeof(qjobopt), (*jobopt == 0) ? "no" : jobopt) ||
-            !_ew_sh_quote(qwinver, sizeof(qwinver), winver))
+        if (!ew_path_join(dir, sizeof(dir), _ew_package_dir_dst, name, NULL))
             exit(1);
-        if (!_ew_cmd(buf, sizeof(buf),
-                     "cd %s && sh ./install.sh %s %s %s %s %s %s %s",
-                     qdir, qarch, qtname, qprefix, qhost, qjobopt,
-                     verbose ? "yes" : "no", qwinver))
-            exit(1);
-        ret = system(buf);
-        if (ret != 0)
         {
-            char logfile[4096];
+            const char *const argv[] = {
+                "sh", "./install.sh", arch, tarname, prefix, host, jobs, verb, winver, NULL};
 
-            printf(" Can not install %s\n", name);
-            snprintf(logfile, sizeof(logfile), "%s/%s/make.log",
-                     _ew_package_dir_dst, name);
-            f = fopen(logfile, "r");
-            if (f)
+            if (!ewpi_run(dir, argv))
             {
-                size_t n;
+                char logfile[EW_PATH_SIZE];
 
-                printf("--- last lines of %s ---\n", logfile);
-                n = fread(buf, 1, sizeof(buf) - 1, f);
-                buf[n] = '\0';
-                fputs(buf, stdout);
-                fclose(f);
-                printf("--- end of log ---\n");
+                printf(" Can not install %s\n", name);
+                if (ew_path_join(logfile, sizeof(logfile), dir, "make.log", NULL))
+                {
+                    f = fopen(logfile, "r");
+                    if (f)
+                    {
+                        size_t n;
+
+                        printf("--- last lines of %s ---\n", logfile);
+                        n = fread(buf, 1, sizeof(buf) - 1, f);
+                        buf[n] = '\0';
+                        fputs(buf, stdout);
+                        fclose(f);
+                        printf("--- end of log ---\n");
+                    }
+                }
+                fflush(stdout);
+                exit(1);
             }
-            fflush(stdout);
-            exit(1);
         }
-        else
+        if (!_ew_write_marker(dir, "installed"))
         {
-            if (!_ew_cmd(buf, sizeof(buf), "echo 1 > %s/installed", qdir))
-                exit(1);
-            ret = system(buf);
-            if (ret != 0)
-            {
-                printf(" error while writing installed marker for %s\n", name);
-                exit(1);
-            }
+            printf(" error while writing installed marker for %s\n", name);
+            exit(1);
         }
 
         c++;
     }
 
-    _ew_packages_status_disp(_ew_package_count_not_installed - 1, _ew_package_count_not_installed, NULL, NULL);
+    _ew_packages_status_disp(_ew_package_count_not_installed - 1,
+                             _ew_package_count_not_installed, NULL, NULL);
     printf("\n");
 }
-
 static void
 _ew_recursive_rm(const char *path)
 {
@@ -1781,7 +1707,10 @@ _ew_packages_clean(void)
     printf("\n:: Cleaning...\n");
     fflush(stdout);
 
-    for (int i = 0; i < _ew_package_count_total; i++)
+    if (_ew_package_deps_dst_count <= 0)
+        return;
+
+    for (int i = 0; i < _ew_package_deps_dst_count; i++)
     {
         const char *name;
         const char *version;
@@ -1792,7 +1721,7 @@ _ew_packages_clean(void)
         version = iter->version;
         tarname = iter->tarname;
 
-        _ew_packages_status_disp(i, _ew_package_count_total, name, version);
+        _ew_packages_status_disp(i, _ew_package_deps_dst_count, name, version);
 
         if (!ew_path_join(buf, sizeof(buf), _ew_package_dir_dst, name, NULL))
             continue;
@@ -1802,7 +1731,7 @@ _ew_packages_clean(void)
             unlink(buf);
     }
 
-    _ew_packages_status_disp(_ew_package_count_total - 1, _ew_package_count_total, NULL, NULL);
+    _ew_packages_status_disp(_ew_package_deps_dst_count - 1, _ew_package_deps_dst_count, NULL, NULL);
     printf("\n");
 }
 
@@ -1811,7 +1740,6 @@ _ew_recurse_strip(const char *path, const char *strip)
 {
     DIR *dir;
     struct dirent *dp;
-    size_t l;
 
     if (!path || !*path)
         return;
@@ -1820,28 +1748,18 @@ _ew_recurse_strip(const char *path, const char *strip)
     if (!dir)
         return;
 
-    l = strlen(path);
-
     do
     {
         dp = readdir(dir);
         if (dp)
         {
-            char file[4096];
+            char file[EW_PATH_SIZE];
             struct stat buf;
-            size_t len;
 
-            if ((*dp->d_name == '.') ||
-                (*(dp->d_name + 1) == '.'))
+            if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0)
                 continue;
-
-            len = strlen(dp->d_name);
-            if ((l + 1 + len + 1) >= 4096)
+            if (snprintf(file, sizeof(file), "%s/%s", path, dp->d_name) >= (int)sizeof(file))
                 continue;
-
-            memcpy(file, path, l);
-            memcpy(file + l, "/", 1);
-            memcpy(file + l + 1, dp->d_name, len + 1);
             if (stat(file, &buf))
                 continue;
 
@@ -1851,32 +1769,18 @@ _ew_recurse_strip(const char *path, const char *strip)
             }
             else
             {
-                char *ext;
-                ext = strrchr(file, '.');
-                if (ext)
-                {
-                    ext++;
-                    if (strcmp(ext, "dll") == 0)
-                    {
-                        char strip_cmd[4096];
-                        char qstrip[2 * 4096];
-                        char qfile[2 * 4096];
-                        int ret;
+                char *ext = strrchr(file, '.');
 
-                        if (!_ew_sh_quote(qstrip, sizeof(qstrip), strip) ||
-                            !_ew_sh_quote(qfile, sizeof(qfile), file))
-                            continue;
-                        if (!_ew_cmd(strip_cmd, sizeof(strip_cmd), "%s %s",
-                                     qstrip, qfile))
-                            continue;
-                        printf("  %s\n", file);
+                if (ext && strcmp(ext + 1, "dll") == 0)
+                {
+                    const char *const argv[] = {strip, file, NULL};
+
+                    printf("  %s\n", file);
+                    fflush(stdout);
+                    if (!ewpi_run(NULL, argv))
+                    {
+                        printf("can not strip '%s'\n", file);
                         fflush(stdout);
-                        ret = system(strip_cmd);
-                        if (ret != 0)
-                        {
-                            printf("can not strip '%s\n'\n", file);
-                            fflush(stdout);
-                        }
                     }
                 }
             }
@@ -1885,7 +1789,6 @@ _ew_recurse_strip(const char *path, const char *strip)
 
     closedir(dir);
 }
-
 static void
 _ew_packages_strip(const char *prefix, const char *host)
 {
@@ -1909,12 +1812,10 @@ _ew_packages_strip(const char *prefix, const char *host)
 static void
 _ew_packages_nsis(const char *prefix, const char *host, const char *winver, int efl)
 {
-    char buf[4096];
-    char qprefix[2 * 4096];
-    char qwinver[2 * 4096];
     const char *arch;
     const char *arch_suf;
-    int ret;
+    char version[32];
+    const char *script;
 
     _ew_packages_strip(prefix, host);
 
@@ -1929,40 +1830,35 @@ _ew_packages_nsis(const char *prefix, const char *host, const char *winver, int 
         arch_suf = "64";
     }
 
-    if (!_ew_sh_quote(qprefix, sizeof(qprefix), prefix) ||
-        !_ew_sh_quote(qwinver, sizeof(qwinver), winver))
+    if (snprintf(version, sizeof(version), "%d.%d", _ew_vmaj, _ew_vmin) >= (int)sizeof(version))
         return;
 
     if (efl)
     {
         printf("\n:: Create EFL NSIS installer...\n");
-        fflush(stdout);
-        if (!_ew_cmd(buf, sizeof(buf),
-                     "sh ./efl_nsis.sh %s %d.%d %s %s %s",
-                     qprefix, _ew_vmaj, _ew_vmin, arch, arch_suf, qwinver))
-            return;
+        script = "./efl_nsis.sh";
     }
     else
     {
         printf("\n:: Create EWPI NSIS installer...\n");
-        fflush(stdout);
-        if (!_ew_cmd(buf, sizeof(buf),
-                     "sh ./ewpi_nsis.sh %s %d.%d %s %s %s",
-                     qprefix, _ew_vmaj, _ew_vmin, arch, arch_suf, qwinver))
-            return;
+        script = "./ewpi_nsis.sh";
     }
-    ret = system(buf);
-    if (ret != 0)
+    fflush(stdout);
     {
-        printf(" Can not create NSIS installer\n");
-        fflush(stdout);
+        const char *const argv[] = {"sh", script, prefix, version, arch, arch_suf, winver, NULL};
+
+        if (!ewpi_run(NULL, argv))
+        {
+            printf(" Can not create NSIS installer\n");
+            fflush(stdout);
+        }
     }
 
     printf("\n");
 }
-
 int main(int argc, char *argv[])
 {
+    char prefix_buf[PATH_MAX];
     char *prefix = NULL;
     char *host = "x86_64-w64-mingw32";
     char *arch =  NULL;;
@@ -2038,6 +1934,17 @@ int main(int argc, char *argv[])
         {
             verbose = 1;
         }
+        else if (strncmp(argv[i], "--package=", strlen("--package=")) == 0)
+        {
+            const char *name = argv[i] + strlen("--package=");
+
+            if (name[0] == '\0' || _ew_only_count >= EW_ONLY_MAX)
+            {
+                _ew_usage(argv[0]);
+                exit(1);
+            }
+            _ew_only[_ew_only_count++] = name;
+        }
         else if (strcmp(argv[i], "--efl") == 0)
         {
             efl = 1;
@@ -2059,17 +1966,16 @@ int main(int argc, char *argv[])
 
     if (!prefix)
     {
-        char buf[PATH_MAX];
         const char *home = getenv("HOME");
+        const char *leaf;
 
-        if (!home || !ew_path_join(buf, sizeof(buf), home,
-                                   (strcmp(host, "i686-w64-mingw32") == 0) ?
-                                   "ewpi_32" : "ewpi_64", NULL))
+        leaf = (strcmp(host, "i686-w64-mingw32") == 0) ? "ewpi_32" : "ewpi_64";
+        if (!home || !ew_path_join(prefix_buf, sizeof(prefix_buf), home, leaf, NULL))
         {
             fprintf(stderr, "error: cannot determine default prefix (is HOME set?)\n");
             exit(1);
         }
-        prefix = strdup(buf);
+        prefix = prefix_buf;
     }
 
     if (!arch)
@@ -2129,28 +2035,41 @@ int main(int argc, char *argv[])
     _ew_packages_get_git();
     _ew_packages_dst_set(prefix);
 
+    if (_ew_package_count_total <= 0)
+    {
+        printf("error: no packages found, exiting...\n");
+        return 1;
+    }
+
     printf(":: Build the dependency tree...\n");
     fflush(stdout);
-    _ew_package_index = (int *)malloc((size_t)_ew_package_count_total * sizeof(int));
-    if (!_ew_package_index)
+    _ew_package_index = (int *)calloc((size_t)_ew_package_count_total, sizeof(int));
+    _ew_package_visiting = (unsigned char *)calloc((size_t)_ew_package_count_total, 1);
+    if (!_ew_package_index || !_ew_package_visiting)
         return 1;
 
-    /* Build the dependency tree from every recipe found in packages/ by
-     * default; the 'efl' meta-package is only pulled in when it was
-     * explicitly requested with --efl. Previously the tree was rooted at
-     * "efl" unconditionally, which made every run without --efl abort
-     * with "error: unknown dependency 'efl'" as soon as the efl recipe
-     * was not part of the loaded list (e.g. after it had been dropped,
-     * or when the copy under $prefix/share/ewpi/packages was stale). */
-    for (int i = 0; i < _ew_package_count_total; i++)
+    /* With no --package, build every recipe except the efl meta-package.
+     * --package=NAME (repeatable) builds only that recipe and its deps.
+     * --efl adds the efl meta-package on top of either selection. */
+    if (_ew_only_count == 0)
     {
-        const Package *p = &_ewpi_pkgs[i];
+        for (int i = 0; i < _ew_package_count_total; i++)
+        {
+            const Package *p = &_ewpi_pkgs[i];
 
-        if (!p->name)
-            continue;
-        if (strcmp(p->name, "efl") == 0 && !efl)
-            continue;
-        _ew_packages_tree(p->name);
+            if (!p->name)
+                continue;
+            if (strcmp(p->name, "efl") == 0 && !efl)
+                continue;
+            _ew_packages_tree(p->name);
+        }
+    }
+    else
+    {
+        for (int i = 0; i < _ew_only_count; i++)
+            _ew_packages_tree(_ew_only[i]);
+        if (efl)
+            _ew_packages_tree("efl");
     }
 
     printf(":: Check which package is not installed...\n");
@@ -2174,6 +2093,7 @@ int main(int argc, char *argv[])
         _ew_packages_clean();
 
     free(_ew_package_index);
+    free(_ew_package_visiting);
     for (int i = 0; i < _ew_package_count_total; i++)
     {
         free(_ewpi_pkgs[i].name);
@@ -2183,7 +2103,7 @@ int main(int argc, char *argv[])
         free(_ewpi_pkgs[i].sha512sum);
         for (int j = 0; j < _ewpi_pkgs[i].deps_count; j++)
             free(_ewpi_pkgs[i].deps[j]);
-        free(_ewpi_pkgs[i].deps);
+        free((void *)_ewpi_pkgs[i].deps);
     }
     free(_ewpi_pkgs);
 

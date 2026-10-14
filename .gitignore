@@ -1,1 +1,6 @@
+*.log
+*~
+ewpi.exe
+ewpi
 ewpi_asan
+ewpi-prefix/

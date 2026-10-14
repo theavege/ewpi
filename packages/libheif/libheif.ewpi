@@ -1,4 +1,5 @@
 name: libheif
 version: 1.23.5
 url: https://github.com/strukturag/libheif/releases/download/v1.23.5/libheif-1.23.5.tar.gz
+sha512SUM: 481f94d7b1a88edfcaa8218c3f07df8ed17609a7fcb79a48f42bddcc7dfb7412f4d68299808300e0c81d4d171aec9b3281922adc39bb49d94fd5b73ffcb2eb1f
 deps: libde265 libaom libwebp

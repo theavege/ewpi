@@ -7,6 +7,10 @@
 # $6 : verbose
 # $7 : winver
 
+ewpi_arch=$1
+ewpi_tarname=$2
+ewpi_prefix=$3
+ewpi_host=$4
 jobopt=$5
 verbose=$6
 
@@ -15,12 +19,12 @@ set -e
 unset PKG_CONFIG_PATH
 
 EWPI_OS=$(uname)
-case ${EWPI_OS} in
+case "${EWPI_OS}" in
     MSYS* | MINGW*)
-        prefix_unix=$(cygpath -u $3)
+        prefix_unix=$(cygpath -u "${ewpi_prefix}")
         ;;
     *)
-        prefix_unix=$3
+        prefix_unix=${ewpi_prefix}
         ;;
 esac
 
@@ -30,14 +34,14 @@ else
     winver="0x0A00"
 fi
 
-export PATH=$prefix_unix/bin:$PATH
+export PATH="${prefix_unix}/bin:${PATH}"
 export PKG_CONFIG_DIR=
-export PKG_CONFIG_LIBDIR=$3/lib/pkgconfig
-export PKG_CONFIG_SYSROOT_DIR=$3
-export CPPFLAGS="-D__USE_MINGW_ANSI_STDIO=0 -D_WIN32_WINNT=$winver -I$3/include"
-export CFLAGS="-O2 -pipe -march=$1"
-export CXXFLAGS="-O2 -pipe -march=$1"
-export LDFLAGS="-L$3/lib -s"
+export PKG_CONFIG_LIBDIR="${ewpi_prefix}/lib/pkgconfig"
+export PKG_CONFIG_SYSROOT_DIR="${ewpi_prefix}"
+export CPPFLAGS="-D__USE_MINGW_ANSI_STDIO=0 -D_WIN32_WINNT=${winver} -I${ewpi_prefix}/include"
+export CFLAGS="-O2 -pipe -march=${ewpi_arch}"
+export CXXFLAGS="-O2 -pipe -march=${ewpi_arch}"
+export LDFLAGS="-L${ewpi_prefix}/lib -s"
 
 if test "x${jobopt}" = "xno"; then
     jobopt=""
@@ -51,27 +55,36 @@ if test "x${verbose}" = "xyes"; then
 else
     verbmake="V=0"
     verbcmake="OFF"
+    verbninja=""
+    verbff=""
 fi
 
 export verbmake verbcmake verbninja verbff
+export ewpi_arch ewpi_tarname ewpi_prefix ewpi_host jobopt verbose winver prefix_unix
 
-case $2 in
+# Recipes run from $prefix/share/ewpi/packages/<name>. This file and
+# drivers.sh are both two directories above that, matching the layout
+# under packages/ in the repository.
+# shellcheck source=../../drivers.sh
+. ../../drivers.sh
+
+case "${ewpi_tarname}" in
     *.git)
-        bn=$(basename $2)
+        bn=$(basename "${ewpi_tarname}")
         dir_name=${bn%.*}
         ;;
     *.xz | *.lzma | *.lz)
-        dir_name=$(tar tJfh $2 | head -1 | cut -f1 -d"/")
+        dir_name=$(tar tJfh "${ewpi_tarname}" | head -1 | cut -f1 -d"/")
         ;;
     *.bz2)
-        dir_name=$(tar tjf $2 | head -1 | cut -f1 -d"/")
+        dir_name=$(tar tjf "${ewpi_tarname}" | head -1 | cut -f1 -d"/")
         ;;
     *.gz | *.tgz)
-        dir_name=$(tar tzf $2 | head -1 | cut -f1 -d"/")
+        dir_name=$(tar tzf "${ewpi_tarname}" | head -1 | cut -f1 -d"/")
         ;;
 esac
 
-cd $dir_name || exit
+cd "${dir_name}" || exit
 
 EWPI_PWD="$(pwd)"
 export EWPI_PWD
