@@ -392,20 +392,27 @@ _ew_requirements(const char *host)
 #ifdef _WIN32
     char gcc_path[4096];
     char dir[4096];
-    HMODULE mod;
     char *slash;
     DWORD len;
 
-    mod = LoadLibraryA("gcc.exe");
-    if (!mod)
+    /* gcc.exe is a program, not a DLL, so LoadLibrary cannot locate it.
+     * SearchPath walks PATH, which is where MSYS2 puts the MinGW compiler. */
+    len = SearchPathA(NULL, "gcc.exe", NULL, (DWORD)sizeof(gcc_path), gcc_path, NULL);
+    if (len == 0 || len >= sizeof(gcc_path))
+    {
+        printf("  gcc : no\n");
+        fflush(stdout);
         return 0;
-    len = GetModuleFileNameA(mod, gcc_path, sizeof(gcc_path));
-    FreeLibrary(mod);
-    if (!len)
-        return 0;
+    }
     slash = strrchr(gcc_path, '\\');
     if (!slash)
+        slash = strrchr(gcc_path, '/');
+    if (!slash)
+    {
+        printf("  gcc : no\n");
+        fflush(stdout);
         return 0;
+    }
     slash[1] = '\0';
     if (ew_strlcpy(dir, gcc_path, sizeof(dir)) >= sizeof(dir))
         return 0;
@@ -427,7 +434,11 @@ _ew_requirements(const char *host)
             return 0;
         /* Overwrite so a second run still works. */
         if (!CopyFileA(src_path, dst_path, FALSE))
+        {
+            printf("  %s : no\n", _ew_req_host[i]);
+            fflush(stdout);
             return 0;
+        }
 
         ret = ewpi_spawnv(host, _ew_req_host[i], "--version");
         printf("  %s : %s\n", _ew_req_host[i], ret ? "yes" : "no");
