@@ -12,7 +12,7 @@ if [[ -n ${MSYSTEM:-} || ${OSTYPE:-} == msys* ]]; then
     is_msys=1
 fi
 
-f_setup()
+f_setup_lint()
 {
     if [[ ! -f /etc/os-release ]]; then
         return 0
@@ -26,14 +26,39 @@ f_setup()
         debian | ubuntu)
             sudo apt-get update
             sudo apt-get install -y \
-                clang-tidy clang-format shfmt shellcheck python3-pip \
+                clang-tidy shfmt shellcheck gcc
+            ;;
+        fedora | alma)
+            sudo dnf install -y \
+                clang-tools-extra clang shfmt shellcheck gcc
+            ;;
+        *)
+            echo "unsupported distro: ${ID}" >&2
+            return 1
+            ;;
+    esac
+}
+
+f_setup_smoke()
+{
+    if [[ ! -f /etc/os-release ]]; then
+        return 0
+    fi
+    # shellcheck disable=SC1091
+    set +u
+    source /etc/os-release
+    set -u
+    case ${ID:?} in
+        msys2) return 0 ;;
+        debian | ubuntu)
+            sudo apt-get update
+            sudo apt-get install -y \
                 meson autoconf automake libtool itstool gettext \
                 cmake yasm nasm gperf python3 perl ninja-build pkgconf \
                 g++-mingw-w64-x86-64 libgomp1 gcc nsis bison flex make
             ;;
         fedora | alma)
             sudo dnf install -y \
-                clang-tools-extra clang shfmt shellcheck \
                 meson autoconf automake libtool gettext cmake yasm nasm gperf \
                 python python3-pip perl ninja-build pkgconf \
                 mingw64-libgomp mingw64-gcc mingw64-gcc-c++ mingw64-nsis \
@@ -53,10 +78,7 @@ f_lint()
         return 0
     fi
 
-    f_setup
-
-    python3 -m pip install --user 'clang-format==23.1.3'
-    export PATH="${HOME}/.local/bin:${PATH}"
+    f_setup_lint
 
     shellcheck --severity=error --external-sources --source-path=SCRIPTDIR \
         "${0}" common.sh drivers.sh packages/*/*.sh efl_nsis.sh ewpi_nsis.sh
@@ -80,10 +102,10 @@ f_lint()
 f_smoke()
 {
     local -a tools
-    local prefix dll
+    local prefix dll ewpi_bin
 
     if [[ ${is_msys} -eq 0 ]]; then
-        f_setup
+        f_setup_smoke
         tools=(
             x86_64-w64-mingw32-gcc
             x86_64-w64-mingw32-g++
@@ -91,12 +113,13 @@ f_smoke()
             x86_64-w64-mingw32-ranlib
             x86_64-w64-mingw32-strip
             x86_64-w64-mingw32-windres
+            x86_64-w64-mingw32-dlltool
             meson cmake make makensis python perl ninja yasm nasm gperf wget bison flex
         )
         prefix="$(pwd)/ewpi-prefix"
     else
         # MINGW64 names the compiler gcc. ewpi copies it to the triplet name.
-        tools=(gcc g++ ar nm ranlib strip windres meson cmake make makensis python perl ninja yasm nasm gperf wget bison flex)
+        tools=(gcc g++ ar nm ranlib strip windres dlltool meson cmake make makensis python perl ninja yasm nasm gperf wget bison flex)
         prefix="$(cygpath -m "$(pwd)/ewpi-prefix")"
     fi
 
@@ -105,10 +128,19 @@ f_smoke()
         command -V "${tool}"
     done
 
+    # A previously checked-in Linux ewpi binary must not shadow the one
+    # just built. On MSYS2, gcc -o ewpi writes ewpi.exe and leaves an
+    # extensionless file alone, so ./ewpi would try to run that ELF.
+    rm -f ewpi ewpi.exe
     gcc -std=c99 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 \
         -o ewpi ewpi.c ewpi_map.c ewpi_spawn.c
-    ./ewpi --help >/dev/null
-    ./ewpi --package=zlib --prefix="${prefix}" --jobs=2
+    if [[ ${is_msys} -eq 1 ]]; then
+        ewpi_bin=./ewpi.exe
+    else
+        ewpi_bin=./ewpi
+    fi
+    "${ewpi_bin}" --help >/dev/null
+    "${ewpi_bin}" --package=zlib --prefix="${prefix}" --jobs=2
 
     dll="${prefix}/bin/zlib-1.dll"
     if [[ ! -f ${dll} ]]; then

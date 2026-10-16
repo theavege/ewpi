@@ -460,21 +460,24 @@ _ew_requirements(const char *host)
 static int
 _ew_packages_dir_set(const char *prefix)
 {
+    char cwd[PATH_MAX];
     char buf[PATH_MAX];
     char *iter;
 
-    /* first, package in the git repo */
-    if (!getcwd(buf, PATH_MAX))
+    /* first, package in the git repo. cwd and buf must be distinct:
+     * snprintf does not allow the destination to overlap a %s argument,
+     * and doing so drops the directory and leaves a path like "/packages". */
+    if (!getcwd(cwd, sizeof(cwd)))
         return 0;
 
-    iter = buf;
+    iter = cwd;
     while (*iter)
     {
         if (*iter == '\\') *iter = '/';
         iter++;
     }
 
-    if (!_ew_cmd(buf, sizeof(buf), "%s/packages", buf))
+    if (!_ew_cmd(buf, sizeof(buf), "%s/packages", cwd))
         return 0;
 
     _ew_package_dir_git = strdup(buf);
@@ -491,7 +494,7 @@ _ew_packages_dir_set(const char *prefix)
 }
 
 static void
-_ew_packages_count_total()
+_ew_packages_count_total(void)
 {
     DIR *dir;
     struct dirent *f;
@@ -651,7 +654,7 @@ _ew_packages_fill(Map *map, Package *pkg)
                 }
                 /* deps_count + 1 entries: one per space-separated token
                  * plus the final token after the last space. */
-                pkg->deps = (char **)calloc((size_t)pkg->deps_count + 1u, sizeof(char *));
+                pkg->deps = (char **)calloc((size_t)pkg->deps_count + 1U, sizeof(char *));
                 j = 0;
                 iter2++;
                 iter = iter2;
@@ -1092,7 +1095,7 @@ _ew_sha512_transform(EwSha512Ctx *ctx, const unsigned char *data)
 
     for (t = 0; t < 16; t++)
     {
-        size_t off = (size_t)t * 8u;
+        size_t off = (size_t)t * 8U;
 
         w[t] = ((unsigned long long)data[off] << 56) |
                ((unsigned long long)data[off + 1] << 48) |
@@ -1383,7 +1386,7 @@ _ew_packages_download(void)
     }
 }
 static void
-_ew_packages_longest_name()
+_ew_packages_longest_name(void)
 {
     Package *iter;
 
@@ -2029,7 +2032,11 @@ int main(int argc, char *argv[])
     }
 
     printf(":: Prepare directories in %s...\n", prefix);
-    _ew_packages_dir_set(prefix);
+    if (!_ew_packages_dir_set(prefix))
+    {
+        printf("error: cannot prepare package directories, exiting...\n");
+        return 1;
+    }
 
     _ew_packages_count_total();
     _ew_packages_get_git();
