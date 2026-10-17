@@ -135,11 +135,19 @@ f_smoke()
     gcc -std=c99 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 \
         -o ewpi ewpi.c ewpi_map.c ewpi_spawn.c
     if [[ ${is_msys} -eq 1 ]]; then
-        ewpi_bin=./ewpi.exe
-        # ewpi.exe is a native Windows program. SearchPath and stat do not
-        # understand a POSIX PATH (/mingw64/bin:...), so hand it the Windows
-        # form before it looks for gcc.exe.
-        export PATH="$(cygpath -w -p "$PATH")"
+        local gccdir winpath
+
+        # A native ewpi.exe cannot search /mingw64/bin. Stage triplet-named
+        # copies next to the binary; ewpi puts that directory on PATH.
+        mkdir -p ewpi-tools
+        cp -f ewpi.exe ewpi-tools/ewpi.exe
+        gccdir="$(dirname "$(command -v gcc)")"
+        for tool in gcc g++ ar dlltool nm ranlib strip windres; do
+            cp -f "${gccdir}/${tool}.exe" "ewpi-tools/x86_64-w64-mingw32-${tool}.exe"
+        done
+        ewpi_bin=./ewpi-tools/ewpi.exe
+        winpath="$(cygpath -w -p "$PATH")"
+        export PATH="${winpath}"
     else
         ewpi_bin=./ewpi
     fi

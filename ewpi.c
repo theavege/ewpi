@@ -432,6 +432,59 @@ _ew_win_find_exe(const char *name, char *out, size_t outsz)
 
     return 0;
 }
+
+/* True when <host>-gcc.exe already sits next to ewpi.exe. The Windows CI
+ * job stages those copies there, because a native binary cannot open a
+ * POSIX PATH entry such as /mingw64/bin. */
+static int
+_ew_win_tools_beside_self(const char *host)
+{
+    char self[EW_PATH_SIZE];
+    char dir[EW_PATH_SIZE];
+    char probe[EW_PATH_SIZE];
+    char name[256];
+    char *slash;
+    DWORD n;
+    size_t len;
+
+    n = GetModuleFileNameA(NULL, self, (DWORD)sizeof(self));
+    if (n == 0 || n >= sizeof(self))
+        return 0;
+    slash = strrchr(self, '\\');
+    if (!slash)
+        slash = strrchr(self, '/');
+    if (!slash)
+        return 0;
+    slash[1] = '\0';
+    if (ew_strlcpy(dir, self, sizeof(dir)) >= sizeof(dir))
+        return 0;
+    len = strlen(dir);
+    if (len > 0 && (dir[len - 1] == '\\' || dir[len - 1] == '/'))
+        dir[len - 1] = '\0';
+    if (snprintf(name, sizeof(name), "%s-gcc.exe", host) < 0)
+        return 0;
+    if (!ew_path_join(probe, sizeof(probe), dir, name, NULL))
+        return 0;
+    if (GetFileAttributesA(probe) == INVALID_FILE_ATTRIBUTES)
+        return 0;
+
+    {
+        char oldpath[32768];
+        char newpath[32768];
+        DWORD got = GetEnvironmentVariableA("PATH", oldpath, (DWORD)sizeof(oldpath));
+        int written;
+
+        if (got == 0 || got >= sizeof(oldpath))
+            oldpath[0] = '\0';
+        written = snprintf(newpath, sizeof(newpath), "%s;%s", dir, oldpath);
+        if (written < 0 || (size_t)written >= sizeof(newpath))
+            return 0;
+        if (!SetEnvironmentVariableA("PATH", newpath))
+            return 0;
+    }
+
+    return 1;
+}
 #endif
 
 static int
@@ -440,6 +493,19 @@ _ew_requirements(const char *host)
     int ret;
 
 #ifdef _WIN32
+    if (_ew_win_tools_beside_self(host))
+    {
+        for (int i = 0; _ew_req_host[i]; i++)
+        {
+            ret = ewpi_spawnv(host, _ew_req_host[i], "--version");
+            printf("  %s : %s\n", _ew_req_host[i], ret ? "yes" : "no");
+            fflush(stdout);
+            if (!ret)
+                return 0;
+        }
+    }
+    else
+    {
     char gcc_path[EW_PATH_SIZE];
     char src_dir[EW_PATH_SIZE];
     char tools[EW_PATH_SIZE];
@@ -528,6 +594,7 @@ _ew_requirements(const char *host)
         fflush(stdout);
         if (!ret)
             return 0;
+    }
     }
 #else
     for (int i = 0; _ew_req_host[i]; i++)
