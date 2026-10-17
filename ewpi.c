@@ -738,6 +738,16 @@ _ew_version_get(char *ver, int *maj, int *min, int *mic, int *rev)
         *maj = atoi(start);
 }
 
+static const unsigned char *
+_ew_without_cr(const unsigned char *start, const unsigned char *end)
+{
+    /* Git on Windows checks recipes out with CRLF. The CR is not part of
+     * the value, and leaving it on the package name makes every lookup miss. */
+    if (end > start && end[-1] == '\r')
+        return end - 1;
+    return end;
+}
+
 static void
 _ew_packages_fill(Map *map, Package *pkg)
 {
@@ -754,7 +764,7 @@ _ew_packages_fill(Map *map, Package *pkg)
             iter += 6;
             iter2 = iter;
             while (*iter != '\n') iter++;
-            pkg->name = _ew_str_get(iter2, iter);
+            pkg->name = _ew_str_get(iter2, _ew_without_cr(iter2, iter));
         }
         else if (EWPI_VERSION(iter))
         {
@@ -763,7 +773,7 @@ _ew_packages_fill(Map *map, Package *pkg)
             iter += 9;
             iter2 = iter;
             while (*iter != '\n') iter++;
-            pkg->version = _ew_str_get(iter2, iter);
+            pkg->version = _ew_str_get(iter2, _ew_without_cr(iter2, iter));
             _ew_version_get(pkg->version, &pkg->vmaj, &pkg->vmin, &pkg->vmic, &pkg->vrev);
         }
         else if (EWPI_URL(iter))
@@ -774,7 +784,7 @@ _ew_packages_fill(Map *map, Package *pkg)
             iter += 5;
             iter2 = iter;
             while (*iter != '\n') iter++;
-            pkg->url = _ew_str_get(iter2, iter);
+            pkg->url = _ew_str_get(iter2, _ew_without_cr(iter2, iter));
             tarname = strrchr(pkg->url, '/');
             tarname++;
             pkg->tarname = strdup(tarname);
@@ -790,11 +800,13 @@ _ew_packages_fill(Map *map, Package *pkg)
             iter += 11;
             iter2 = iter;
             while (*iter != '\n') iter++;
-            pkg->sha512sum = _ew_str_get(iter2, iter);
+            pkg->sha512sum = _ew_str_get(iter2, _ew_without_cr(iter2, iter));
         }
         else if (EWPI_DEPS(iter))
         {
             iter += 5;
+            if (*iter == '\r')
+                iter++;
             if (*iter == '\n')
             {
                 pkg->deps_count = 0;
@@ -836,6 +848,8 @@ _ew_packages_fill(Map *map, Package *pkg)
                 {
                     size_t dlen = (size_t)(iter - iter2);
 
+                    if (dlen > 0 && iter2[dlen - 1] == '\r')
+                        dlen--;
                     pkg->deps[j] = (char *)malloc(dlen + 1);
                     memcpy(pkg->deps[j], iter2, dlen);
                     pkg->deps[j][dlen] = '\0';
