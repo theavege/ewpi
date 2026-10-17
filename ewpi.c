@@ -384,21 +384,73 @@ static const char *_ew_req[][2] =
     { NULL, NULL }
 };
 
+#ifdef _WIN32
+/* SearchPath(NULL) does not reliably walk PATH, and a native MinGW
+ * binary cannot open a POSIX path like /mingw64/bin/gcc.exe. Walk PATH
+ * ourselves. A Windows PATH is semicolon-separated; a POSIX one uses
+ * colons and is only useful after cygpath has rewritten it. */
+static int
+_ew_win_find_exe(const char *name, char *out, size_t outsz)
+{
+    const char *env = getenv("PATH");
+    const char *cursor;
+    int semi;
+
+    if (!env || !name)
+        return 0;
+
+    semi = strchr(env, ';') != NULL;
+    cursor = env;
+    while (*cursor)
+    {
+        const char *sep = strchr(cursor, semi ? ';' : ':');
+        char dir[EW_PATH_SIZE];
+        char candidate[EW_PATH_SIZE];
+        size_t n;
+        DWORD attr;
+
+        if (!sep)
+            sep = cursor + strlen(cursor);
+        n = (size_t)(sep - cursor);
+        if (n > 0 && n < sizeof(dir))
+        {
+            memcpy(dir, cursor, n);
+            dir[n] = '\0';
+            if (ew_path_join(candidate, sizeof(candidate), dir, name, NULL))
+            {
+                attr = GetFileAttributesA(candidate);
+                if (attr != INVALID_FILE_ATTRIBUTES &&
+                    (attr & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+                    ew_strlcpy(out, candidate, outsz) < outsz)
+                    return 1;
+            }
+        }
+        if (*sep == '\0')
+            break;
+        cursor = sep + 1;
+    }
+
+    return 0;
+}
+#endif
+
 static int
 _ew_requirements(const char *host)
 {
     int ret;
 
 #ifdef _WIN32
-    char gcc_path[4096];
-    char dir[4096];
+    char gcc_path[EW_PATH_SIZE];
+    char src_dir[EW_PATH_SIZE];
+    char tools[EW_PATH_SIZE];
+    char temp[EW_PATH_SIZE];
     char *slash;
-    DWORD len;
+    DWORD n;
 
-    /* gcc.exe is a program, not a DLL, so LoadLibrary cannot locate it.
-     * SearchPath walks PATH, which is where MSYS2 puts the MinGW compiler. */
-    len = SearchPathA(NULL, "gcc.exe", NULL, (DWORD)sizeof(gcc_path), gcc_path, NULL);
-    if (len == 0 || len >= sizeof(gcc_path))
+    /* Copy gcc.exe and friends to triplet names in a directory we own.
+     * The MinGW tree itself is not always writable, and the recipes call
+     * x86_64-w64-mingw32-gcc rather than gcc. */
+    if (!_ew_win_find_exe("gcc.exe", gcc_path, sizeof(gcc_path)))
     {
         printf("  gcc : no\n");
         fflush(stdout);
@@ -414,25 +466,56 @@ _ew_requirements(const char *host)
         return 0;
     }
     slash[1] = '\0';
-    if (ew_strlcpy(dir, gcc_path, sizeof(dir)) >= sizeof(dir))
+    if (ew_strlcpy(src_dir, gcc_path, sizeof(src_dir)) >= sizeof(src_dir))
         return 0;
+
+    n = GetTempPathA((DWORD)sizeof(temp), temp);
+    if (n == 0 || n >= sizeof(temp))
+        return 0;
+    if (n > 0 && (temp[n - 1] == '\\' || temp[n - 1] == '/'))
+        temp[n - 1] = '\0';
+    if (!ew_path_join(tools, sizeof(tools), temp, "ewpi-tools", NULL))
+        return 0;
+    for (char *p = tools; *p; p++)
+    {
+        if (*p == '/')
+            *p = '\\';
+    }
+    if (GetFileAttributesA(tools) == INVALID_FILE_ATTRIBUTES &&
+        !CreateDirectoryA(tools, NULL))
+    {
+        printf("  gcc : no\n");
+        fflush(stdout);
+        return 0;
+    }
+
+    {
+        char oldpath[32768];
+        char newpath[32768];
+        DWORD got = GetEnvironmentVariableA("PATH", oldpath, (DWORD)sizeof(oldpath));
+        int written;
+
+        if (got == 0 || got >= sizeof(oldpath))
+            oldpath[0] = '\0';
+        written = snprintf(newpath, sizeof(newpath), "%s;%s", tools, oldpath);
+        if (written < 0 || (size_t)written >= sizeof(newpath) ||
+            !SetEnvironmentVariableA("PATH", newpath))
+            return 0;
+    }
 
     for (int i = 0; _ew_req_host[i]; i++)
     {
-        char src_path[4096];
-        char dst_path[4096];
+        char src_path[EW_PATH_SIZE];
+        char dst_name[256];
+        char dst_path[EW_PATH_SIZE];
 
-        if (ew_strlcpy(src_path, dir, sizeof(src_path)) >= sizeof(src_path) ||
+        if (ew_strlcpy(src_path, src_dir, sizeof(src_path)) >= sizeof(src_path) ||
             ew_strlcat(src_path, _ew_req_host[i], sizeof(src_path)) >= sizeof(src_path) ||
             ew_strlcat(src_path, ".exe", sizeof(src_path)) >= sizeof(src_path))
             return 0;
-        if (ew_strlcpy(dst_path, dir, sizeof(dst_path)) >= sizeof(dst_path) ||
-            ew_strlcat(dst_path, host, sizeof(dst_path)) >= sizeof(dst_path) ||
-            ew_strlcat(dst_path, "-", sizeof(dst_path)) >= sizeof(dst_path) ||
-            ew_strlcat(dst_path, _ew_req_host[i], sizeof(dst_path)) >= sizeof(dst_path) ||
-            ew_strlcat(dst_path, ".exe", sizeof(dst_path)) >= sizeof(dst_path))
+        if (snprintf(dst_name, sizeof(dst_name), "%s-%s.exe", host, _ew_req_host[i]) < 0 ||
+            !ew_path_join(dst_path, sizeof(dst_path), tools, dst_name, NULL))
             return 0;
-        /* Overwrite so a second run still works. */
         if (!CopyFileA(src_path, dst_path, FALSE))
         {
             printf("  %s : no\n", _ew_req_host[i]);

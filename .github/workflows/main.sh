@@ -136,6 +136,10 @@ f_smoke()
         -o ewpi ewpi.c ewpi_map.c ewpi_spawn.c
     if [[ ${is_msys} -eq 1 ]]; then
         ewpi_bin=./ewpi.exe
+        # ewpi.exe is a native Windows program. SearchPath and stat do not
+        # understand a POSIX PATH (/mingw64/bin:...), so hand it the Windows
+        # form before it looks for gcc.exe.
+        export PATH="$(cygpath -w -p "$PATH")"
     else
         ewpi_bin=./ewpi
     fi
