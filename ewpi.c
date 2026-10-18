@@ -483,8 +483,42 @@ _ew_win_tools_beside_self(const char *host)
             return 0;
     }
 
+/* EWPI_TOOLDIR is a Windows path of the directory that already holds
+ * <host>-gcc.exe beside the real MinGW libexec tree. Copying gcc.exe
+ * anywhere else makes it fail with "cannot execute cc1". */
+static int
+_ew_win_use_tooldir(const char *host)
+{
+    const char *dir = getenv("EWPI_TOOLDIR");
+    char probe[EW_PATH_SIZE];
+    char name[256];
+    char oldpath[32768];
+    char newpath[32768];
+    DWORD attr;
+    DWORD got;
+    int written;
+
+    if (!dir || dir[0] == '\0')
+        return 0;
+    if (snprintf(name, sizeof(name), "%s-gcc.exe", host) < 0)
+        return 0;
+    if (!ew_path_join(probe, sizeof(probe), dir, name, NULL))
+        return 0;
+    attr = GetFileAttributesA(probe);
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) != 0)
+        return 0;
+
+    got = GetEnvironmentVariableA("PATH", oldpath, (DWORD)sizeof(oldpath));
+    if (got == 0 || got >= sizeof(oldpath))
+        oldpath[0] = '\0';
+    written = snprintf(newpath, sizeof(newpath), "%s;%s", dir, oldpath);
+    if (written < 0 || (size_t)written >= sizeof(newpath))
+        return 0;
+    if (!SetEnvironmentVariableA("PATH", newpath))
+        return 0;
     return 1;
 }
+
 #endif
 
 static int
@@ -493,7 +527,7 @@ _ew_requirements(const char *host)
     int ret;
 
 #ifdef _WIN32
-    if (_ew_win_tools_beside_self(host))
+    if (_ew_win_use_tooldir(host) || _ew_win_tools_beside_self(host))
     {
         for (int i = 0; _ew_req_host[i]; i++)
         {
@@ -508,14 +542,10 @@ _ew_requirements(const char *host)
     {
     char gcc_path[EW_PATH_SIZE];
     char src_dir[EW_PATH_SIZE];
-    char tools[EW_PATH_SIZE];
-    char temp[EW_PATH_SIZE];
     char *slash;
-    DWORD n;
 
-    /* Copy gcc.exe and friends to triplet names in a directory we own.
-     * The MinGW tree itself is not always writable, and the recipes call
-     * x86_64-w64-mingw32-gcc rather than gcc. */
+    /* Keep the triplet-named copies next to the real gcc.exe. Moving
+     * them breaks the relative lookup of cc1. */
     if (!_ew_win_find_exe("gcc.exe", gcc_path, sizeof(gcc_path)))
     {
         printf("  gcc : no\n");
@@ -531,29 +561,9 @@ _ew_requirements(const char *host)
         fflush(stdout);
         return 0;
     }
-    slash[1] = '\0';
+    *slash = '\0';
     if (ew_strlcpy(src_dir, gcc_path, sizeof(src_dir)) >= sizeof(src_dir))
         return 0;
-
-    n = GetTempPathA((DWORD)sizeof(temp), temp);
-    if (n == 0 || n >= sizeof(temp))
-        return 0;
-    if (n > 0 && (temp[n - 1] == '\\' || temp[n - 1] == '/'))
-        temp[n - 1] = '\0';
-    if (!ew_path_join(tools, sizeof(tools), temp, "ewpi-tools", NULL))
-        return 0;
-    for (char *p = tools; *p; p++)
-    {
-        if (*p == '/')
-            *p = '\\';
-    }
-    if (GetFileAttributesA(tools) == INVALID_FILE_ATTRIBUTES &&
-        !CreateDirectoryA(tools, NULL))
-    {
-        printf("  gcc : no\n");
-        fflush(stdout);
-        return 0;
-    }
 
     {
         char oldpath[32768];
@@ -563,7 +573,7 @@ _ew_requirements(const char *host)
 
         if (got == 0 || got >= sizeof(oldpath))
             oldpath[0] = '\0';
-        written = snprintf(newpath, sizeof(newpath), "%s;%s", tools, oldpath);
+        written = snprintf(newpath, sizeof(newpath), "%s;%s", src_dir, oldpath);
         if (written < 0 || (size_t)written >= sizeof(newpath) ||
             !SetEnvironmentVariableA("PATH", newpath))
             return 0;
@@ -576,11 +586,12 @@ _ew_requirements(const char *host)
         char dst_path[EW_PATH_SIZE];
 
         if (ew_strlcpy(src_path, src_dir, sizeof(src_path)) >= sizeof(src_path) ||
+            ew_strlcat(src_path, "/", sizeof(src_path)) >= sizeof(src_path) ||
             ew_strlcat(src_path, _ew_req_host[i], sizeof(src_path)) >= sizeof(src_path) ||
             ew_strlcat(src_path, ".exe", sizeof(src_path)) >= sizeof(src_path))
             return 0;
         if (snprintf(dst_name, sizeof(dst_name), "%s-%s.exe", host, _ew_req_host[i]) < 0 ||
-            !ew_path_join(dst_path, sizeof(dst_path), tools, dst_name, NULL))
+            !ew_path_join(dst_path, sizeof(dst_path), src_dir, dst_name, NULL))
             return 0;
         if (!CopyFileA(src_path, dst_path, FALSE))
         {

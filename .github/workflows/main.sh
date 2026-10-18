@@ -135,19 +135,17 @@ f_smoke()
     gcc -std=c99 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 \
         -o ewpi ewpi.c ewpi_map.c ewpi_spawn.c
     if [[ ${is_msys} -eq 1 ]]; then
-        local gccdir winpath
+        local gccdir tool tooldir
 
-        # A native ewpi.exe cannot search /mingw64/bin. Stage triplet-named
-        # copies next to the binary; ewpi puts that directory on PATH.
-        mkdir -p ewpi-tools
-        cp -f ewpi.exe ewpi-tools/ewpi.exe
+        # gcc.exe finds cc1 relative to its own directory, so the triplet
+        # names have to be copies in that directory, not a staging folder.
         gccdir="$(dirname "$(command -v gcc)")"
         for tool in gcc g++ ar dlltool nm ranlib strip windres; do
-            cp -f "${gccdir}/${tool}.exe" "ewpi-tools/x86_64-w64-mingw32-${tool}.exe"
+            cp -f "${gccdir}/${tool}.exe" "${gccdir}/x86_64-w64-mingw32-${tool}.exe"
         done
-        ewpi_bin=./ewpi-tools/ewpi.exe
-        winpath="$(cygpath -w -p "$PATH")"
-        export PATH="${winpath}"
+        tooldir="$(cygpath -w "${gccdir}")"
+        export EWPI_TOOLDIR="${tooldir}"
+        ewpi_bin=./ewpi.exe
     else
         ewpi_bin=./ewpi
     fi
