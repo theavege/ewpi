@@ -483,6 +483,9 @@ _ew_win_tools_beside_self(const char *host)
             return 0;
     }
 
+    return 1;
+}
+
 /* EWPI_TOOLDIR is a Windows path of the directory that already holds
  * <host>-gcc.exe beside the real MinGW libexec tree. Copying gcc.exe
  * anywhere else makes it fail with "cannot execute cc1". */
