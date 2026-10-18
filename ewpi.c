@@ -1707,11 +1707,10 @@ _ew_packages_extract(int verbose)
             taropt[idx++] = 'z';
         else if (strcmp(ext, "bz2") == 0)
             taropt[idx++] = 'j';
-        else
-        {
+        else if ((strcmp(ext, "xz") == 0) || (strcmp(ext, "lzma") == 0))
             taropt[idx++] = 'J';
-            taropt[idx++] = 'h';
-        }
+        else
+            exit(1);
         taropt[idx++] = 'f';
         taropt[idx++] = '\0';
 

@@ -152,7 +152,11 @@ f_smoke()
         ewpi_bin=./ewpi
     fi
     "${ewpi_bin}" --help >/dev/null
-    "${ewpi_bin}" --package=zlib --prefix="${prefix}" --jobs=2
+    if ! "${ewpi_bin}" --package=zlib --prefix="${prefix}" --jobs=2; then
+        echo "ewpi failed; recipe logs:" >&2
+        find "${prefix}" -name '*.log' -exec tail -n 60 {} \; >&2 || true
+        return 1
+    fi
 
     dll="${prefix}/bin/zlib-1.dll"
     if [[ ! -f ${dll} ]]; then

@@ -74,7 +74,7 @@ case "${ewpi_tarname}" in
         dir_name=${bn%.*}
         ;;
     *.xz | *.lzma | *.lz)
-        dir_name=$(tar tJfh "${ewpi_tarname}" | head -1 | cut -f1 -d"/")
+        dir_name=$(tar tJf "${ewpi_tarname}" | head -1 | cut -f1 -d"/")
         ;;
     *.bz2)
         dir_name=$(tar tjf "${ewpi_tarname}" | head -1 | cut -f1 -d"/")
