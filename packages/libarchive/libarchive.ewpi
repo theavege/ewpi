@@ -1,5 +1,4 @@
 name: libarchive
-version: 3.8.8
-url: https://github.com/libarchive/libarchive/releases/download/v3.8.8/libarchive-3.8.8.tar.xz
-sha512SUM: 6952aaa3f7aa275b1a678c03b3ca3a50111a1305f0eb50362b8a85599f1c13a0c771530c7caea6ddcc3c8ceead4c206abca851d8b2c4b64968773d8fd6fc64de
+version: 3.8.10
+url: https://github.com/libarchive/libarchive/releases/download/v3.8.10/libarchive-3.8.10.tar.xz
 deps: zlib xz openssl lz4 bzip2 zstd libblake2 expat iconv regex

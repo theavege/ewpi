@@ -1,5 +1,4 @@
 name: freetype
-version: 2.14.3
-url: http://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz
-sha512SUM: 43de86ea70b4b47f6efaae67f3440f65a24ffac29dc6d11203a9764e4f1a749ce1ba7645acd23525220b3ba12ddad8687b962b9f1254e2c0a86070854e85d5a0
+version: 2.15.0
+url: http://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.xz
 deps: zlib libpng bzip2 brotli
