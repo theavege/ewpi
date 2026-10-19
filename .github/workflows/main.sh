@@ -137,11 +137,16 @@ f_smoke()
     if [[ ${is_msys} -eq 1 ]]; then
         local gccdir tool tooldir
 
-        # gcc.exe finds cc1 relative to its own directory, so the triplet
-        # names have to be copies in that directory, not a staging folder.
+        # gcc.exe finds cc1 relative to its own directory. Modern MinGW
+        # already installs the triplet name as the same file; only copy
+        # when that name is missing.
         gccdir="$(dirname "$(command -v gcc)")"
         for tool in gcc g++ ar dlltool nm ranlib strip windres; do
-            cp -f "${gccdir}/${tool}.exe" "${gccdir}/x86_64-w64-mingw32-${tool}.exe"
+            src="${gccdir}/${tool}.exe"
+            dest="${gccdir}/x86_64-w64-mingw32-${tool}.exe"
+            if [[ ! -e ${dest} ]]; then
+                cp -f "${src}" "${dest}"
+            fi
         done
         tooldir="$(cygpath -w "${gccdir}")"
         export EWPI_TOOLDIR="${tooldir}"
